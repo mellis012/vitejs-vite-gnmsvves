@@ -166,13 +166,25 @@ function SectionLabel({ text, sub }: { text: string; sub?: string }) {
   );
 }
 
+type StatusConfig = {
+  bg: string;
+  border: string;
+  color: string;
+  text: string;
+  icon: string;
+};
+
 function StatusBanner({ status, errorMsg, onDismiss }: { status: string | null; errorMsg: string; onDismiss: () => void }) {
   if (!status) return null;
-  const cfg = {
+  
+  const statusConfigs: Record<string, StatusConfig> = {
     loading: { bg: "#1c2a1c", border: "#2ea043", color: "#56d364", text: "Submitting to SharePoint Excel…", icon: "⏳" },
     success: { bg: "#1c2a1c", border: "#2ea043", color: "#56d364", text: "Crew forecast saved to your SharePoint Excel file.", icon: "✓" },
     error:   { bg: "#2a1c1c", border: "#f85149", color: "#ff7b72", text: errorMsg || "Submission failed.", icon: "✕" },
-  }[status as string];
+  };
+  
+  const cfg = statusConfigs[status] || statusConfigs.error;
+  
   return (
     <div style={{ background: cfg.bg, border: `1px solid ${cfg.border}`, borderRadius: 2, padding: "14px 20px", marginBottom: 24, display: "flex", alignItems: "flex-start", gap: 12 }}>
       <span style={{ fontSize: 18, lineHeight: 1.2 }}>{cfg.icon}</span>
