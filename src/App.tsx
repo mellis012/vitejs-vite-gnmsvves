@@ -1,10 +1,6 @@
 import { useState, useMemo } from "react";
+import { supabase } from "./lib/supabase";
 
-// ────────────────────────────────────────────────────────────────────────
-// CONFIGURATION — paste your Power Automate HTTP trigger URL here
-// See SETUP_GUIDE.md for step-by-step instructions
-// ────────────────────────────────────────────────────────────────────────
-const POWER_AUTOMATE_URL = "https://defaultcd5a6385583c413aa28aa6c2aa18e8.f6.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/72705878a1b740c89b05cb7d249c26b4/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=db8nTmOnccgwrEYuX63Dm_gPwOB3tIrmAEoFSOG2kwQ";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const ROLES = ["Foremen", "Journeymen", "Apprentices"];
@@ -178,9 +174,29 @@ function StatusBanner({ status, errorMsg, onDismiss }: { status: string | null; 
   if (!status) return null;
   
   const statusConfigs: Record<string, StatusConfig> = {
-    loading: { bg: "#1c2a1c", border: "#2ea043", color: "#56d364", text: "Submitting to SharePoint Excel…", icon: "⏳" },
-    success: { bg: "#1c2a1c", border: "#2ea043", color: "#56d364", text: "Crew forecast saved to your SharePoint Excel file.", icon: "✓" },
-    error:   { bg: "#2a1c1c", border: "#f85149", color: "#ff7b72", text: errorMsg || "Submission failed.", icon: "✕" },
+    loading: {
+      bg: "#1c2a1c",
+      border: "#2ea043",
+      color: "#56d364",
+      text: "Submitting manpower forecast…",
+      icon: "⏳"
+    },
+
+    success: {
+      bg: "#1c2a1c",
+      border: "#2ea043",
+      color: "#56d364",
+      text: "Crew forecast saved successfully.",
+      icon: "✓"
+    },
+
+    error: {
+      bg: "#2a1c1c",
+      border: "#f85149",
+      color: "#ff7b72",
+      text: errorMsg || "Submission failed.",
+      icon: "✕"
+    },
   };
   
   const cfg = statusConfigs[status] || statusConfigs.error;
@@ -190,11 +206,6 @@ function StatusBanner({ status, errorMsg, onDismiss }: { status: string | null; 
       <span style={{ fontSize: 18, lineHeight: 1.2 }}>{cfg.icon}</span>
       <div style={{ flex: 1 }}>
         <div style={{ fontFamily: "var(--font-label)", fontSize: 13, color: cfg.color, letterSpacing: "0.04em" }}>{cfg.text}</div>
-        {status === "error" && (
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
-            Verify POWER_AUTOMATE_URL is set in the source file and the Power Automate flow is active. See SETUP_GUIDE.md.
-          </div>
-        )}
       </div>
       {status !== "loading" && (
         <button onClick={onDismiss} style={{ background: "none", border: "none", color: cfg.color, cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
@@ -248,28 +259,59 @@ export default function CrewForm() {
 
   const handleSubmit = async () => {
     if (!pmName || !jobName || !jobNumber || !jobEndDate) {
-      alert("Please fill in all required fields (marked with *)."); return;
+	  alert("Please fill in all required fields (marked with *).");
+	  return;
     }
-    if (POWER_AUTOMATE_URL !== "https://defaultcd5a6385583c413aa28aa6c2aa18e8.f6.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/72705878a1b740c89b05cb7d249c26b4/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=db8nTmOnccgwrEYuX63Dm_gPwOB3tIrmAEoFSOG2kwQ") {
-      setErrorMsg("Power Automate URL is not configured. Open the source file and replace PASTE_YOUR_POWER_AUTOMATE_URL_HERE with your actual URL.");
-      setSubmitStatus("error"); return;
-    }
+
     setSubmitStatus("loading");
-    const payload = buildPayload({ pmName, jobName, jobNumber, jobEndDate, notes, week1, week2, week3, remainingWeeks, remainingWeekDefs, thisMonday, week2Monday, week3Monday });
+
+    const payload = buildPayload({
+	  pmName,
+	  jobName,
+	  jobNumber,
+	  jobEndDate,
+	  notes,
+	  week1,
+	  week2,
+	  week3,
+	  remainingWeeks,
+	  remainingWeekDefs,
+	  thisMonday,
+	  week2Monday,
+	  week3Monday,
+    });
+
     try {
-      const res = await fetch(POWER_AUTOMATE_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`);
-      setSubmitStatus("success");
-      setTimeout(() => { handleReset(); }, 4000);
+	  const { error } = await supabase
+	    .from("manpower_reports")
+	    .insert([
+		  {
+		    pm_name: pmName,
+		    job_name: jobName,
+		    job_number: jobNumber,
+		    job_end_date: jobEndDate,
+		    notes: notes,
+		    payload: payload,
+		  },
+	    ]);
+
+	  if (error) {
+	    throw error;
+	  }
+
+	  setSubmitStatus("success");
+
+	  setTimeout(() => {
+	    handleReset();
+	  }, 4000);
+
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      setErrorMsg(`Could not reach Power Automate: ${errorMessage}`);
-      setSubmitStatus("error");
-    }
+	  const errorMessage =
+	    err instanceof Error ? err.message : "Unknown error";
+
+	  setErrorMsg(`Supabase submission failed: ${errorMessage}`);
+	  setSubmitStatus("error");
+   }
   };
 
   const busy = submitStatus === "loading";
