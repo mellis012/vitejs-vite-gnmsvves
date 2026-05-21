@@ -345,10 +345,15 @@ export default function CrewForm() {
             <div style={{ fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 700, color: "var(--text)", letterSpacing: "0.04em", lineHeight: 1 }}>CREW FORECAST</div>
             <div style={{ fontFamily: "var(--font-label)", fontSize: 12, color: "var(--muted)", marginTop: 4, letterSpacing: "0.06em" }}>Weekly Manpower Projection — Submitted by Project Manager</div>
           </div>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", textAlign: "right" }}>
-            <div>Period Starting</div>
-            <div style={{ color: "var(--text)", fontWeight: 700, fontSize: 13 }}>
-              {thisMonday.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 }}>
+            <a href="#/dashboard" style={{ background: "transparent", border: "1px solid var(--border)", borderRadius: 2, color: "var(--muted)", fontFamily: "var(--font-label)", fontWeight: 700, fontSize: 12, letterSpacing: "0.08em", padding: "7px 14px", textDecoration: "none" }}>
+              View Dashboard →
+            </a>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", textAlign: "right" }}>
+              <div>Period Starting</div>
+              <div style={{ color: "var(--text)", fontWeight: 700, fontSize: 13 }}>
+                {thisMonday.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+              </div>
             </div>
           </div>
         </div>
