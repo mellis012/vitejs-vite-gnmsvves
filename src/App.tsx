@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { supabase } from "./lib/supabase";
 
 const DAYS  = ["Mon", "Tue", "Wed", "Thu", "Fri"];
@@ -21,6 +21,21 @@ const CONFIDENCE = [
   { label: "MED",  value: "Medium", color: "#f0b429" },
   { label: "HIGH", value: "High",   color: "#3fb950" },
 ] as const;
+
+const QUALIFICATIONS = [
+  { key: "Background_Check", label: "Background Check" },
+  { key: "OSHA_10",          label: "OSHA 10"          },
+  { key: "OSHA_30",          label: "OSHA 30"          },
+  { key: "First_Aid_CPR",    label: "First Aid / CPR"  },
+  { key: "Aerial_Lift",      label: "Aerial Lift"      },
+  { key: "Confined_Space",   label: "Confined Space"   },
+  { key: "Arc_Flash",        label: "Arc Flash"        },
+  { key: "Forklift",         label: "Forklift"         },
+] as const;
+
+type QualKey = typeof QUALIFICATIONS[number]["key"];
+const emptyQuals = (): Record<QualKey, boolean> =>
+  Object.fromEntries(QUALIFICATIONS.map(q => [q.key, false])) as Record<QualKey, boolean>;
 
 // ── Utility functions ──────────────────────────────────────────────────────
 function getMonday(date: Date | string): Date {
@@ -52,6 +67,7 @@ function buildPayload({
   pmName, jobNumber, jobEndDate,
   week1Notes, week2Notes, week3Notes,
   week1Confidence, week2Confidence, week3Confidence,
+  qualifications,
   week1, week2, week3,
   remainingWeeks, remainingWeekDefs,
   thisMonday, week2Monday, week3Monday,
@@ -65,6 +81,7 @@ function buildPayload({
   week1Confidence: string;
   week2Confidence: string;
   week3Confidence: string;
+  qualifications: Record<QualKey, boolean>;
   week1: Record<string, Record<string, string>>;
   week2: Record<string, Record<string, string>>;
   week3: Record<string, Record<string, string>>;
@@ -104,6 +121,7 @@ function buildPayload({
     Weeks_4_Plus_Total_Crew: remainingWeekDefs.reduce(
       (s, wk) => s + (parseInt(remainingWeeks[`wk${wk.num}`]) || 0), 0
     ),
+    ...Object.fromEntries(QUALIFICATIONS.map(q => [`Q_${q.key}`, qualifications[q.key] ? 1 : 0])),
   };
 }
 
@@ -291,7 +309,8 @@ function StatusBanner({ status, errorMsg, onDismiss }: { status: string | null; 
 // ── Main form ──────────────────────────────────────────────────────────────
 export default function CrewForm() {
   const today       = new Date(); today.setHours(0, 0, 0, 0);
-  const thisMonday  = getMonday(today);
+  // Week 1 always starts next Monday so PMs never fill in days that have already passed
+  const thisMonday  = addWeeks(getMonday(today), 1);
   const week2Monday = addWeeks(thisMonday, 1);
   const week3Monday = addWeeks(thisMonday, 2);
   const week4Monday = addWeeks(thisMonday, 3);
@@ -312,9 +331,35 @@ export default function CrewForm() {
   const [week2Confidence, setWeek2Confidence] = useState("");
   const [week3Confidence, setWeek3Confidence] = useState("");
 
+  const [qualifications, setQualifications] = useState<Record<QualKey, boolean>>(emptyQuals);
   const [remainingWeeks, setRemainingWeeks] = useState<Record<string, string>>({});
   const [submitStatus,   setSubmitStatus]   = useState<string | null>(null);
   const [errorMsg,       setErrorMsg]       = useState("");
+  const [qualsLoading,   setQualsLoading]   = useState(false);
+
+  // Auto-populate qualifications when a known job number is typed
+  useEffect(() => {
+    if (!jobNumber || jobNumber.trim().length < 2) return;
+    const timer = setTimeout(async () => {
+      setQualsLoading(true);
+      const { data } = await supabase
+        .from("manpower_reports")
+        .select("payload")
+        .eq("job_number", jobNumber.trim())
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (data?.[0]?.payload) {
+        const p = data[0].payload as Record<string, unknown>;
+        setQualifications(
+          Object.fromEntries(
+            QUALIFICATIONS.map(q => [q.key, Boolean(p[`Q_${q.key}`])])
+          ) as Record<QualKey, boolean>
+        );
+      }
+      setQualsLoading(false);
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [jobNumber]);
 
   const remainingWeekDefs = useMemo(() => {
     if (!jobEndDate) return [];
@@ -338,6 +383,7 @@ export default function CrewForm() {
     setWeek1(emptyWeekGrid()); setWeek2(emptyWeekGrid()); setWeek3(emptyWeekGrid());
     setWeek1Notes(""); setWeek2Notes(""); setWeek3Notes("");
     setWeek1Confidence(""); setWeek2Confidence(""); setWeek3Confidence("");
+    setQualifications(emptyQuals());
     setRemainingWeeks({}); setSubmitStatus(null);
   };
 
@@ -353,6 +399,7 @@ export default function CrewForm() {
       pmName, jobNumber, jobEndDate,
       week1Notes, week2Notes, week3Notes,
       week1Confidence, week2Confidence, week3Confidence,
+      qualifications,
       week1, week2, week3,
       remainingWeeks, remainingWeekDefs,
       thisMonday, week2Monday, week3Monday,
@@ -476,6 +523,52 @@ export default function CrewForm() {
               </div>
 
             </div>
+
+            {/* Required Worker Qualifications */}
+            <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border-faint)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                <label style={{ ...fieldLabel, marginBottom: 0 }}>Required Worker Qualifications</label>
+                {qualsLoading && (
+                  <span style={{ fontFamily: "var(--font-label)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.06em" }}>
+                    loading…
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "8px 16px" }}>
+                {QUALIFICATIONS.map(q => (
+                  <label
+                    key={q.key}
+                    style={{ display: "flex", alignItems: "center", gap: 8, cursor: busy ? "not-allowed" : "pointer", userSelect: "none" }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={qualifications[q.key] ?? false}
+                      onChange={e => setQualifications(prev => ({ ...prev, [q.key]: e.target.checked }))}
+                      disabled={busy}
+                      style={{ display: "none" }}
+                    />
+                    {/* Custom checkbox */}
+                    <span style={{
+                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      width: 16, height: 16, flexShrink: 0, borderRadius: 2, transition: "all 0.15s",
+                      border: `1px solid ${qualifications[q.key] ? "var(--accent)" : "var(--border)"}`,
+                      background: qualifications[q.key] ? "var(--accent)" : "transparent",
+                      opacity: busy ? 0.5 : 1,
+                    }}>
+                      {qualifications[q.key] && (
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                          <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="#0d1117" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      )}
+                    </span>
+                    <span style={{ fontFamily: "var(--font-label)", fontSize: 12, color: "var(--label)", letterSpacing: "0.04em" }}>
+                      {q.label}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
           </div>
         </section>
 
@@ -483,7 +576,7 @@ export default function CrewForm() {
         <section style={{ marginBottom: 8 }}>
           <SectionLabel text="Three-Week Daily Crew Breakdown" sub="Enter the number of each crew type needed per day" />
           <WeekGrid
-            weekLabel={fmtWeekLabel(thisMonday)} weekNum="Current Week"
+            weekLabel={fmtWeekLabel(thisMonday)} weekNum="Week 1 — Next Week"
             data={week1} onChange={handleWeekChange(setWeek1)} disabled={busy}
             confidence={week1Confidence} onConfidenceChange={setWeek1Confidence}
             notes={week1Notes} onNotesChange={setWeek1Notes}
