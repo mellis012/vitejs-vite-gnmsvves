@@ -108,14 +108,16 @@ export default function Dashboard() {
 
   useEffect(() => { fetchData(); }, []);
 
-  // Most recent submission per job_number
+  // Most recent submission per job_number — skips any record with a null payload
   const latestByJob = useMemo(() => {
     const map: Record<string, Report> = {};
     for (const r of reports) {
-      const ts  = String(r.payload.Submission_Timestamp || r.created_at);
-      const ex  = map[r.job_number];
-      const exTs = ex ? String(ex.payload.Submission_Timestamp || ex.created_at) : "";
-      if (!ex || ts > exTs) map[r.job_number] = r;
+      if (!r.payload) continue;
+      const key  = r.job_number || String(r.id);
+      const ts   = String(r.payload.Submission_Timestamp || r.created_at);
+      const ex   = map[key];
+      const exTs = ex ? String(ex.payload?.Submission_Timestamp || ex.created_at) : "";
+      if (!ex || ts > exTs) map[key] = r;
     }
     return Object.values(map);
   }, [reports]);
@@ -124,45 +126,48 @@ export default function Dashboard() {
   const weeklyData = useMemo(() => [
     {
       week: "Wk 1 — Current",
-      Foremen:     latestByJob.reduce((s, r) => s + (Number(r.payload.W1_FO_Total) || 0), 0),
-      Journeymen:  latestByJob.reduce((s, r) => s + (Number(r.payload.W1_JO_Total) || 0), 0),
-      Apprentices: latestByJob.reduce((s, r) => s + (Number(r.payload.W1_AP_Total) || 0), 0),
+      Foremen:     latestByJob.reduce((s, r) => s + (Number(r.payload?.W1_FO_Total) || 0), 0),
+      Journeymen:  latestByJob.reduce((s, r) => s + (Number(r.payload?.W1_JO_Total) || 0), 0),
+      Apprentices: latestByJob.reduce((s, r) => s + (Number(r.payload?.W1_AP_Total) || 0), 0),
     },
     {
       week: "Wk 2",
-      Foremen:     latestByJob.reduce((s, r) => s + (Number(r.payload.W2_FO_Total) || 0), 0),
-      Journeymen:  latestByJob.reduce((s, r) => s + (Number(r.payload.W2_JO_Total) || 0), 0),
-      Apprentices: latestByJob.reduce((s, r) => s + (Number(r.payload.W2_AP_Total) || 0), 0),
+      Foremen:     latestByJob.reduce((s, r) => s + (Number(r.payload?.W2_FO_Total) || 0), 0),
+      Journeymen:  latestByJob.reduce((s, r) => s + (Number(r.payload?.W2_JO_Total) || 0), 0),
+      Apprentices: latestByJob.reduce((s, r) => s + (Number(r.payload?.W2_AP_Total) || 0), 0),
     },
     {
       week: "Wk 3",
-      Foremen:     latestByJob.reduce((s, r) => s + (Number(r.payload.W3_FO_Total) || 0), 0),
-      Journeymen:  latestByJob.reduce((s, r) => s + (Number(r.payload.W3_JO_Total) || 0), 0),
-      Apprentices: latestByJob.reduce((s, r) => s + (Number(r.payload.W3_AP_Total) || 0), 0),
+      Foremen:     latestByJob.reduce((s, r) => s + (Number(r.payload?.W3_FO_Total) || 0), 0),
+      Journeymen:  latestByJob.reduce((s, r) => s + (Number(r.payload?.W3_JO_Total) || 0), 0),
+      Apprentices: latestByJob.reduce((s, r) => s + (Number(r.payload?.W3_AP_Total) || 0), 0),
     },
   ], [latestByJob]);
 
   // Per-job current week breakdown for horizontal bar chart
   const jobWeekData = useMemo(() =>
     latestByJob
-      .sort((a, b) => (Number(b.payload.W1_WeekTotal) || 0) - (Number(a.payload.W1_WeekTotal) || 0))
+      .sort((a, b) => (Number(b.payload?.W1_WeekTotal) || 0) - (Number(a.payload?.W1_WeekTotal) || 0))
       .slice(0, 12)
-      .map(r => ({
-        job:         r.job_number.length > 22 ? r.job_number.slice(0, 20) + "…" : r.job_number,
-        Foremen:     Number(r.payload.W1_FO_Total) || 0,
-        Journeymen:  Number(r.payload.W1_JO_Total) || 0,
-        Apprentices: Number(r.payload.W1_AP_Total) || 0,
-      }))
+      .map(r => {
+        const label = String(r.job_number || r.payload?.Job_Number || r.id || "Unknown");
+        return {
+          job:         label.length > 22 ? label.slice(0, 20) + "…" : label,
+          Foremen:     Number(r.payload?.W1_FO_Total) || 0,
+          Journeymen:  Number(r.payload?.W1_JO_Total) || 0,
+          Apprentices: Number(r.payload?.W1_AP_Total) || 0,
+        };
+      })
       .filter(d => d.Foremen + d.Journeymen + d.Apprentices > 0),
     [latestByJob]
   );
 
   // Summary stats
   const totalJobs   = latestByJob.length;
-  const totalW1     = latestByJob.reduce((s, r) => s + (Number(r.payload.W1_WeekTotal) || 0), 0);
-  const totalW2     = latestByJob.reduce((s, r) => s + (Number(r.payload.W2_WeekTotal) || 0), 0);
-  const totalW3     = latestByJob.reduce((s, r) => s + (Number(r.payload.W3_WeekTotal) || 0), 0);
-  const totalW4Plus = latestByJob.reduce((s, r) => s + (Number(r.payload.Weeks_4_Plus_Total_Crew) || 0), 0);
+  const totalW1     = latestByJob.reduce((s, r) => s + (Number(r.payload?.W1_WeekTotal) || 0), 0);
+  const totalW2     = latestByJob.reduce((s, r) => s + (Number(r.payload?.W2_WeekTotal) || 0), 0);
+  const totalW3     = latestByJob.reduce((s, r) => s + (Number(r.payload?.W3_WeekTotal) || 0), 0);
+  const totalW4Plus = latestByJob.reduce((s, r) => s + (Number(r.payload?.Weeks_4_Plus_Total_Crew) || 0), 0);
 
   // Sortable submissions table
   const sortedReports = useMemo(() => {
@@ -170,8 +175,8 @@ export default function Dashboard() {
       let av: string | number;
       let bv: string | number;
       if (["W1_WeekTotal", "W2_WeekTotal", "W3_WeekTotal"].includes(sortField)) {
-        av = Number(a.payload[sortField]) || 0;
-        bv = Number(b.payload[sortField]) || 0;
+        av = Number(a.payload?.[sortField]) || 0;
+        bv = Number(b.payload?.[sortField]) || 0;
       } else {
         av = (a as unknown as Record<string, string>)[sortField] ?? "";
         bv = (b as unknown as Record<string, string>)[sortField] ?? "";
@@ -310,16 +315,16 @@ export default function Dashboard() {
                     <td style={{ ...tdS(), fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text)" }}>{r.job_number}</td>
                     <td style={{ ...tdS(), fontFamily: "var(--font-body)", fontSize: 12, color: "var(--label)" }}>{r.pm_name}</td>
                     <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: "var(--accent)" }}>
-                      {Number(r.payload.W1_WeekTotal) || "–"}
+                      {Number(r.payload?.W1_WeekTotal) || "–"}
                     </td>
                     <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text)" }}>
-                      {Number(r.payload.W2_WeekTotal) || "–"}
+                      {Number(r.payload?.W2_WeekTotal) || "–"}
                     </td>
                     <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text)" }}>
-                      {Number(r.payload.W3_WeekTotal) || "–"}
+                      {Number(r.payload?.W3_WeekTotal) || "–"}
                     </td>
                     <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted)" }}>
-                      {Number(r.payload.Weeks_4_Plus_Total_Crew) || "–"}
+                      {Number(r.payload?.Weeks_4_Plus_Total_Crew) || "–"}
                     </td>
                     <td style={{ ...tdS(), fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
                       {r.job_end_date
