@@ -148,7 +148,7 @@ export default function Dashboard() {
       .sort((a, b) => (Number(b.payload.W1_WeekTotal) || 0) - (Number(a.payload.W1_WeekTotal) || 0))
       .slice(0, 12)
       .map(r => ({
-        job:         r.job_name.length > 22 ? r.job_name.slice(0, 20) + "…" : r.job_name,
+        job:         r.job_number.length > 22 ? r.job_number.slice(0, 20) + "…" : r.job_number,
         Foremen:     Number(r.payload.W1_FO_Total) || 0,
         Journeymen:  Number(r.payload.W1_JO_Total) || 0,
         Apprentices: Number(r.payload.W1_AP_Total) || 0,
@@ -291,10 +291,9 @@ export default function Dashboard() {
             sub={`${reports.length} record${reports.length !== 1 ? "s" : ""} — click column headers to sort`}
           />
           <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 780 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 660 }}>
               <thead>
                 <tr style={{ background: "var(--th-bg)" }}>
-                  <th style={thS()}          onClick={() => handleSort("job_name")}>Job Name{sortArrow("job_name")}</th>
                   <th style={thS()}          onClick={() => handleSort("job_number")}>Job #{sortArrow("job_number")}</th>
                   <th style={thS()}          onClick={() => handleSort("pm_name")}>PM{sortArrow("pm_name")}</th>
                   <th style={thS("center")}  onClick={() => handleSort("W1_WeekTotal")}>Wk 1{sortArrow("W1_WeekTotal")}</th>
@@ -308,10 +307,7 @@ export default function Dashboard() {
               <tbody>
                 {sortedReports.map((r, i) => (
                   <tr key={r.id} style={{ background: i % 2 === 0 ? "var(--row-even)" : "var(--row-odd)" }}>
-                    <td style={{ ...tdS(), fontFamily: "var(--font-body)", fontSize: 13, color: "var(--text)", maxWidth: 200 }}>
-                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.job_name}</div>
-                    </td>
-                    <td style={{ ...tdS(), fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted)" }}>{r.job_number}</td>
+                    <td style={{ ...tdS(), fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text)" }}>{r.job_number}</td>
                     <td style={{ ...tdS(), fontFamily: "var(--font-body)", fontSize: 12, color: "var(--label)" }}>{r.pm_name}</td>
                     <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: "var(--accent)" }}>
                       {Number(r.payload.W1_WeekTotal) || "–"}
@@ -337,7 +333,7 @@ export default function Dashboard() {
                 ))}
                 {sortedReports.length === 0 && (
                   <tr>
-                    <td colSpan={9} style={{ ...tdS("center"), color: "var(--muted)", fontFamily: "var(--font-label)", fontSize: 13, padding: "40px 0" }}>
+                    <td colSpan={8} style={{ ...tdS("center"), color: "var(--muted)", fontFamily: "var(--font-label)", fontSize: 13, padding: "40px 0" }}>
                       No submissions yet
                     </td>
                   </tr>
