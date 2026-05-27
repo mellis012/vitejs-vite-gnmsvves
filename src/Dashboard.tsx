@@ -350,7 +350,7 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
                 <Tooltip
                   contentStyle={TOOLTIP_STYLE}
                   cursor={{ fill: "rgba(255,255,255,0.03)" }}
-                  formatter={(value: unknown, name: string) => [(Math.round((Number(value) || 0) * 10) / 10).toFixed(1), name]}
+                  formatter={(value: unknown, name: unknown) => [(Math.round((Number(value) || 0) * 10) / 10).toFixed(1), String(name ?? "")]}
                 />
                 <Legend wrapperStyle={{ fontFamily: "'Barlow Condensed',sans-serif", fontSize: 12, paddingTop: 12 }} />
                 <ReferenceLine
