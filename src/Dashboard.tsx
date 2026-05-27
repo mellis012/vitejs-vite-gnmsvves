@@ -146,17 +146,6 @@ function SectionLabel({ text, sub }: { text: string; sub?: string }) {
   );
 }
 
-function KPICard({ label, value, sub, highlight }: {
-  label: string; value: string | number; sub?: string; highlight?: boolean;
-}) {
-  return (
-    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, padding: "14px 20px", minWidth: 110 }}>
-      <div style={{ fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 6 }}>{label}</div>
-      <div style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: highlight ? "var(--accent)" : "var(--text)", lineHeight: 1 }}>{value}</div>
-      {sub && <div style={{ fontFamily: "var(--font-label)", fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{sub}</div>}
-    </div>
-  );
-}
 
 function ConfBadge({ value }: { value: string }) {
   const cfg = CONF_STYLE[value];
@@ -183,8 +172,6 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
   const rawW1 = latestByJob.reduce((s, r) => s + (Number(r.payload?.W1_WeekTotal) || 0), 0);
   const rawW2 = latestByJob.reduce((s, r) => s + (Number(r.payload?.W2_WeekTotal) || 0), 0);
   const rawW3 = latestByJob.reduce((s, r) => s + (Number(r.payload?.W3_WeekTotal) || 0), 0);
-  const utilPct = COMPANY_CAPACITY > 0 ? Math.round((rawW1 / 7 / COMPANY_CAPACITY) * 100) : 0;
-
   // Per-day company-wide totals for all three weeks
   const dayTotals = useMemo(() => {
     const result: Record<string, Record<DayOfWeek, number>> = {
@@ -253,12 +240,6 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
     return { ...role, jobDeltas, avgDelta };
   }), [transferRows]);
 
-  // Active job count per week (jobs with non-zero headcount for that week)
-  const activePerWeek = useMemo(() => ({
-    W1: latestByJob.filter(r => (Number(r.payload?.W1_WeekTotal) || 0) > 0).length,
-    W2: latestByJob.filter(r => (Number(r.payload?.W2_WeekTotal) || 0) > 0).length,
-    W3: latestByJob.filter(r => (Number(r.payload?.W3_WeekTotal) || 0) > 0).length,
-  }), [latestByJob]);
 
   // Sortable health matrix
   const healthRows = useMemo(() =>
@@ -369,7 +350,7 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
                 <Tooltip
                   contentStyle={TOOLTIP_STYLE}
                   cursor={{ fill: "rgba(255,255,255,0.03)" }}
-                  formatter={(value: number, name: string) => [(Math.round(value * 10) / 10).toFixed(1), name]}
+                  formatter={(value: unknown, name: string) => [(Math.round((Number(value) || 0) * 10) / 10).toFixed(1), name]}
                 />
                 <Legend wrapperStyle={{ fontFamily: "'Barlow Condensed',sans-serif", fontSize: 12, paddingTop: 12 }} />
                 <ReferenceLine
