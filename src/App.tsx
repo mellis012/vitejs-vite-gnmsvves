@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { supabase } from "./lib/supabase";
 
-const DAYS  = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+const DAYS  = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const ROLES = ["Foremen", "Journeymen", "Apprentices"];
 
 // ─── Edit this list to add / remove Project Managers ──────────────────────
@@ -54,12 +54,26 @@ function fmtDate(d: Date): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 function fmtWeekLabel(monday: Date): string {
-  return `${fmtDate(monday)} – ${fmtDate(addDays(monday, 4))}`;
+  return `${fmtDate(monday)} – ${fmtDate(addDays(monday, 6))}`;
 }
 function emptyWeekGrid(): Record<string, Record<string, string>> {
   const g: Record<string, Record<string, string>> = {};
   ROLES.forEach(r => { g[r] = {}; DAYS.forEach(d => { g[r][d] = ""; }); });
   return g;
+}
+
+// ── Reconstruct a week grid from a previously saved payload ───────────────
+const TAG: Record<string, string> = { Foremen: "FO", Journeymen: "JO", Apprentices: "AP" };
+function weekGridFromPayload(prefix: string, p: Record<string, unknown>): Record<string, Record<string, string>> {
+  const grid: Record<string, Record<string, string>> = {};
+  ROLES.forEach(role => {
+    grid[role] = {};
+    DAYS.forEach(day => {
+      const v = Number(p[`${prefix}_${TAG[role]}_${day}`] ?? 0);
+      grid[role][day] = v === 0 ? "" : String(v);
+    });
+  });
+  return grid;
 }
 
 // ── Payload builder ────────────────────────────────────────────────────────
@@ -178,7 +192,7 @@ function WeekGrid({ weekLabel, weekNum, data, onChange, disabled,
 
       {/* Crew grid table */}
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 780 }}>
           <thead>
             <tr style={{ background: "var(--th-bg)" }}>
               <th style={thS("left")}>Role</th>
@@ -337,24 +351,78 @@ export default function CrewForm() {
   const [errorMsg,       setErrorMsg]       = useState("");
   const [qualsLoading,   setQualsLoading]   = useState(false);
 
-  // Auto-populate qualifications when a known job number is typed
+  // Auto-populate the full form when a known job number is typed
   useEffect(() => {
     if (!jobNumber || jobNumber.trim().length < 2) return;
     const timer = setTimeout(async () => {
       setQualsLoading(true);
       const { data } = await supabase
         .from("manpower_reports")
-        .select("payload")
+        .select("payload, job_end_date")
         .eq("job_number", jobNumber.trim())
         .order("created_at", { ascending: false })
         .limit(1);
-      if (data?.[0]?.payload) {
-        const p = data[0].payload as Record<string, unknown>;
+      if (data?.[0]) {
+        const row = data[0] as { payload: Record<string, unknown>; job_end_date: string | null };
+        const p = row.payload;
+
+        // Qualifications
         setQualifications(
           Object.fromEntries(
             QUALIFICATIONS.map(q => [q.key, Boolean(p[`Q_${q.key}`])])
           ) as Record<QualKey, boolean>
         );
+
+        // Week grids — shift forward based on weeks elapsed since last submission
+        const submittedAt = p.Submission_Timestamp ? String(p.Submission_Timestamp) : null;
+        const prevMonday  = submittedAt ? getMonday(submittedAt) : null;
+        const currMonday  = getMonday(new Date());
+        const weekDiff    = prevMonday
+          ? Math.round((currMonday.getTime() - prevMonday.getTime()) / (7 * 24 * 60 * 60 * 1000))
+          : 0;
+
+        if (weekDiff <= 0) {
+          // Same week or future (shouldn't happen) — no shift
+          setWeek1(weekGridFromPayload("W1", p));
+          setWeek2(weekGridFromPayload("W2", p));
+          setWeek3(weekGridFromPayload("W3", p));
+          if (p.W1_Confidence) setWeek1Confidence(String(p.W1_Confidence));
+          if (p.W2_Confidence) setWeek2Confidence(String(p.W2_Confidence));
+          if (p.W3_Confidence) setWeek3Confidence(String(p.W3_Confidence));
+          if (p.W1_Notes) setWeek1Notes(String(p.W1_Notes));
+          if (p.W2_Notes) setWeek2Notes(String(p.W2_Notes));
+          if (p.W3_Notes) setWeek3Notes(String(p.W3_Notes));
+        } else if (weekDiff === 1) {
+          // 1 week later: prev W2 → curr W1, prev W3 → curr W2, W3 = empty
+          setWeek1(weekGridFromPayload("W2", p));
+          setWeek2(weekGridFromPayload("W3", p));
+          setWeek3(emptyWeekGrid());
+          if (p.W2_Confidence) setWeek1Confidence(String(p.W2_Confidence));
+          if (p.W3_Confidence) setWeek2Confidence(String(p.W3_Confidence));
+          setWeek3Confidence("");
+          if (p.W2_Notes) setWeek1Notes(String(p.W2_Notes));
+          if (p.W3_Notes) setWeek2Notes(String(p.W3_Notes));
+          setWeek3Notes("");
+        } else if (weekDiff === 2) {
+          // 2 weeks later: prev W3 → curr W1, W2 and W3 = empty
+          setWeek1(weekGridFromPayload("W3", p));
+          setWeek2(emptyWeekGrid());
+          setWeek3(emptyWeekGrid());
+          if (p.W3_Confidence) setWeek1Confidence(String(p.W3_Confidence));
+          setWeek2Confidence(""); setWeek3Confidence("");
+          if (p.W3_Notes) setWeek1Notes(String(p.W3_Notes));
+          setWeek2Notes(""); setWeek3Notes("");
+        } else {
+          // 3+ weeks later — too stale, clear all weeks
+          setWeek1(emptyWeekGrid());
+          setWeek2(emptyWeekGrid());
+          setWeek3(emptyWeekGrid());
+          setWeek1Confidence(""); setWeek2Confidence(""); setWeek3Confidence("");
+          setWeek1Notes(""); setWeek2Notes(""); setWeek3Notes("");
+        }
+
+        // Job end date
+        if (row.job_end_date) setJobEndDate(row.job_end_date);
       }
       setQualsLoading(false);
     }, 600);

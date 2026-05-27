@@ -55,18 +55,21 @@ const WEEK_PAIRS = [
 ];
 type WeekPairKey = "W1-W2" | "W2-W3" | "W1-W3";
 
-// ── Average helpers ─────────────────────────────────────────────────────────
+const DAYS_OF_WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
+type DayOfWeek = typeof DAYS_OF_WEEK[number];
+
+// ── Average / delta helpers ─────────────────────────────────────────────────
 // Payload _Total fields are sums of Mon–Fri (5 days). Dividing by 5 gives the
 // avg number of workers on any given day — a much more intuitive headcount.
-const avgNum = (total: number) => total / 5;
+const avgNum = (total: number) => total / 7;
 
 const fmtAvg = (total: number): string => {
-  const v = Math.round((total / 5) * 10) / 10;
+  const v = Math.round((total / 7) * 10) / 10;
   if (v === 0) return "–";
   return v % 1 === 0 ? String(v) : v.toFixed(1);
 };
 
-// Format a delta that is already in "avg" units (i.e. already ÷ 5)
+// Format a value already in avg units (already ÷ 5)
 const fmtDelta = (v: number): string => {
   const r = Math.round(v * 10) / 10;
   if (r === 0) return "0";
@@ -113,10 +116,14 @@ const thS = (align = "left"): React.CSSProperties => ({
   letterSpacing: "0.1em",
   textTransform: "uppercase",
   color: "var(--muted)",
-  cursor: "pointer",
   userSelect: "none",
   whiteSpace: "nowrap",
   background: "var(--th-bg)",
+});
+
+const thSortable = (align = "left"): React.CSSProperties => ({
+  ...thS(align),
+  cursor: "pointer",
 });
 
 const tdS = (align = "left"): React.CSSProperties => ({
@@ -143,9 +150,9 @@ function KPICard({ label, value, sub, highlight }: {
   label: string; value: string | number; sub?: string; highlight?: boolean;
 }) {
   return (
-    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, padding: "16px 20px", flex: 1, minWidth: 120 }}>
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, padding: "14px 20px", minWidth: 110 }}>
       <div style={{ fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 6 }}>{label}</div>
-      <div style={{ fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 700, color: highlight ? "var(--accent)" : "var(--text)", lineHeight: 1 }}>{value}</div>
+      <div style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: highlight ? "var(--accent)" : "var(--text)", lineHeight: 1 }}>{value}</div>
       {sub && <div style={{ fontFamily: "var(--font-label)", fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{sub}</div>}
     </div>
   );
@@ -167,15 +174,36 @@ function ConfBadge({ value }: { value: string }) {
 
 // ── Portfolio View ─────────────────────────────────────────────────────────
 function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; reports: Report[] }) {
-  const [sortField, setSortField] = useState("job_number");
-  const [sortDir,   setSortDir]   = useState<"asc" | "desc">("asc");
-  const [weekPair,  setWeekPair]  = useState<WeekPairKey>("W1-W2");
+  const [sortField,   setSortField]   = useState("job_number");
+  const [sortDir,     setSortDir]     = useState<"asc" | "desc">("asc");
+  const [weekPair,    setWeekPair]    = useState<WeekPairKey>("W1-W2");
+  const [hoveredRole, setHoveredRole] = useState<string | null>(null);
 
-  // KPIs — raw totals used for avg calculation
-  const rawW1   = latestByJob.reduce((s, r) => s + (Number(r.payload?.W1_WeekTotal) || 0), 0);
-  const rawW2   = latestByJob.reduce((s, r) => s + (Number(r.payload?.W2_WeekTotal) || 0), 0);
-  const rawW3   = latestByJob.reduce((s, r) => s + (Number(r.payload?.W3_WeekTotal) || 0), 0);
-  const utilPct = COMPANY_CAPACITY > 0 ? Math.round((rawW1 / 5 / COMPANY_CAPACITY) * 100) : 0;
+  // Raw weekly totals (sum of 5-day role entries across all jobs)
+  const rawW1 = latestByJob.reduce((s, r) => s + (Number(r.payload?.W1_WeekTotal) || 0), 0);
+  const rawW2 = latestByJob.reduce((s, r) => s + (Number(r.payload?.W2_WeekTotal) || 0), 0);
+  const rawW3 = latestByJob.reduce((s, r) => s + (Number(r.payload?.W3_WeekTotal) || 0), 0);
+  const utilPct = COMPANY_CAPACITY > 0 ? Math.round((rawW1 / 7 / COMPANY_CAPACITY) * 100) : 0;
+
+  // Per-day company-wide totals for all three weeks
+  const dayTotals = useMemo(() => {
+    const result: Record<string, Record<DayOfWeek, number>> = {
+      W1: { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 },
+      W2: { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 },
+      W3: { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 },
+    };
+    for (const week of ["W1", "W2", "W3"] as const) {
+      for (const day of DAYS_OF_WEEK) {
+        result[week][day] = latestByJob.reduce((s, r) => {
+          const fo = Number(r.payload?.[`${week}_FO_${day}`]) || 0;
+          const jo = Number(r.payload?.[`${week}_JO_${day}`]) || 0;
+          const ap = Number(r.payload?.[`${week}_AP_${day}`]) || 0;
+          return s + fo + jo + ap;
+        }, 0);
+      }
+    }
+    return result;
+  }, [latestByJob]);
 
   // Job color map
   const jobColorMap = useMemo(() => {
@@ -186,7 +214,7 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
 
   const jobKeys = latestByJob.map(r => r.job_number || String(r.id));
 
-  // Histogram — each segment is avg daily workers for that job/week
+  // Histogram — avg daily workers per job per week
   const histData = useMemo(() =>
     (["W1", "W2", "W3"] as const).map((w, wi) => {
       const labels = ["Week 1", "Week 2", "Week 3"];
@@ -200,25 +228,37 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
     [latestByJob]
   );
 
-  // Week-over-week labor shift — role-level avg daily deltas
+  // Per-job role deltas for the selected week pair
   const transferRows = useMemo(() => {
     const cfg = WEEK_PAIRS.find(p => p.key === weekPair)!;
     const { from, to } = cfg;
-    return latestByJob
-      .map(r => ({
-        job:        r.job_number,
-        pm:         r.pm_name,
-        foDelta:    avgNum((Number(r.payload?.[`${to}_FO_Total`])    || 0) - (Number(r.payload?.[`${from}_FO_Total`])    || 0)),
-        joDelta:    avgNum((Number(r.payload?.[`${to}_JO_Total`])    || 0) - (Number(r.payload?.[`${from}_JO_Total`])    || 0)),
-        apDelta:    avgNum((Number(r.payload?.[`${to}_AP_Total`])    || 0) - (Number(r.payload?.[`${from}_AP_Total`])    || 0)),
-        totalDelta: avgNum((Number(r.payload?.[`${to}_WeekTotal`])   || 0) - (Number(r.payload?.[`${from}_WeekTotal`])   || 0)),
-      }))
-      .sort((a, b) => a.totalDelta - b.totalDelta);
+    return latestByJob.map(r => ({
+      job:        r.job_number,
+      pm:         r.pm_name,
+      foDelta:    avgNum((Number(r.payload?.[`${to}_FO_Total`])    || 0) - (Number(r.payload?.[`${from}_FO_Total`])    || 0)),
+      joDelta:    avgNum((Number(r.payload?.[`${to}_JO_Total`])    || 0) - (Number(r.payload?.[`${from}_JO_Total`])    || 0)),
+      apDelta:    avgNum((Number(r.payload?.[`${to}_AP_Total`])    || 0) - (Number(r.payload?.[`${from}_AP_Total`])    || 0)),
+      totalDelta: avgNum((Number(r.payload?.[`${to}_WeekTotal`])   || 0) - (Number(r.payload?.[`${from}_WeekTotal`])   || 0)),
+    }));
   }, [latestByJob, weekPair]);
 
-  const releasing = transferRows.filter(r => r.totalDelta < 0);
-  const stable    = transferRows.filter(r => r.totalDelta === 0);
-  const pulling   = transferRows.filter(r => r.totalDelta > 0);
+  // Role-focused stats: avg delta per role across all jobs (+ per-job breakdown for hover)
+  const roleStats = useMemo(() => [
+    { key: "foDelta" as const, label: "Foremen",     color: "#f0b429" },
+    { key: "joDelta" as const, label: "Journeymen",  color: "#3b82f6" },
+    { key: "apDelta" as const, label: "Apprentices", color: "#10b981" },
+  ].map(role => {
+    const jobDeltas = transferRows.map(r => ({ job: r.job, pm: r.pm, delta: r[role.key] }));
+    const avgDelta  = jobDeltas.length > 0 ? jobDeltas.reduce((s, d) => s + d.delta, 0) / jobDeltas.length : 0;
+    return { ...role, jobDeltas, avgDelta };
+  }), [transferRows]);
+
+  // Active job count per week (jobs with non-zero headcount for that week)
+  const activePerWeek = useMemo(() => ({
+    W1: latestByJob.filter(r => (Number(r.payload?.W1_WeekTotal) || 0) > 0).length,
+    W2: latestByJob.filter(r => (Number(r.payload?.W2_WeekTotal) || 0) > 0).length,
+    W3: latestByJob.filter(r => (Number(r.payload?.W3_WeekTotal) || 0) > 0).length,
+  }), [latestByJob]);
 
   // Sortable health matrix
   const healthRows = useMemo(() =>
@@ -244,72 +284,63 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
   };
   const arrow = (f: string) => sortField === f ? (sortDir === "desc" ? " ↓" : " ↑") : "";
 
-  // Reusable transfer column renderer
-  const renderTransferCol = (
-    rows: typeof transferRows,
-    header: string,
-    headerColor: string,
-    headerBg: string,
-    totalColor: (v: number) => string
-  ) => (
-    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, overflow: "hidden" }}>
-      <div style={{ background: headerBg, borderBottom: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: headerColor }}>
-        {header} ({rows.length})
-      </div>
-      {rows.length === 0
-        ? <div style={{ padding: "14px", fontFamily: "var(--font-label)", fontSize: 12, color: "var(--muted)" }}>None</div>
-        : rows.map((r, i) => (
-          <div key={r.job} style={{ padding: "10px 14px", borderBottom: i < rows.length - 1 ? "1px solid var(--border-faint)" : "none" }}>
-            {/* Job # and net delta */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 2 }}>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text)" }}>{r.job}</span>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: totalColor(r.totalDelta) }}>
-                {fmtDelta(r.totalDelta)}
-              </span>
-            </div>
-            {/* PM name */}
-            <div style={{ fontFamily: "var(--font-label)", fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>{r.pm}</div>
-            {/* Role deltas */}
-            <div style={{ display: "flex", gap: 12 }}>
-              {([
-                { label: "FO", val: r.foDelta,    color: "#f0b429" },
-                { label: "JO", val: r.joDelta,    color: "#3b82f6" },
-                { label: "AP", val: r.apDelta,    color: "#10b981" },
-              ] as const).map(role => (
-                <div key={role.label} style={{ display: "flex", alignItems: "baseline", gap: 3 }}>
-                  <span style={{ fontFamily: "var(--font-label)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.06em" }}>{role.label}</span>
-                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, color: role.val === 0 ? "var(--muted)" : deltaColor(role.val) }}>
-                    {fmtDelta(role.val)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))
-      }
-    </div>
-  );
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 36 }}>
 
-      {/* ── KPI Row ── */}
+      {/* ── Portfolio Snapshot ── */}
       <section>
         <SectionLabel
           text="Portfolio Snapshot"
-          sub={`Based on latest submission per job · ${reports.length} total submission${reports.length !== 1 ? "s" : ""} · values = avg workers/day`}
+          sub={`Latest submission per job · ${reports.length} total submission${reports.length !== 1 ? "s" : ""} · daily totals = workers deployed company-wide on that day`}
         />
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <KPICard label="Active Jobs"   value={latestByJob.length} highlight />
-          <KPICard label="Wk 1 Avg/Day" value={fmtAvg(rawW1)} sub="next week" />
-          <KPICard label="Wk 2 Avg/Day" value={fmtAvg(rawW2)} sub="following week" />
-          <KPICard label="Wk 3 Avg/Day" value={fmtAvg(rawW3)} sub="third week" />
-          <KPICard
-            label="Utilization"
-            value={`${utilPct}%`}
-            sub={`of ${COMPANY_CAPACITY} daily capacity`}
-            highlight={utilPct > 90}
-          />
+
+        {/* Active Jobs card + daily breakdown table side by side */}
+        <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
+
+          {/* Active Jobs card */}
+          <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, padding: "16px 20px", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", flexShrink: 0, minWidth: 110 }}>
+            <div style={{ fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 8, whiteSpace: "nowrap" }}>Active Jobs</div>
+            <div style={{ fontFamily: "var(--font-display)", fontSize: 42, fontWeight: 700, color: "var(--accent)", lineHeight: 1 }}>{latestByJob.length}</div>
+          </div>
+
+          {/* Daily breakdown table */}
+          <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, overflowX: "auto", flex: 1 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 400 }}>
+              <thead>
+                <tr>
+                  <th style={thS()}>Week</th>
+                  {DAYS_OF_WEEK.map(d => (
+                    <th key={d} style={thS("center")}>{d}</th>
+                  ))}
+                  <th style={{ ...thS("center"), borderLeft: "2px solid var(--border)", color: "var(--accent)" }}>
+                    Avg / Day
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {([
+                  { label: "Week 1", prefix: "W1", rawTotal: rawW1 },
+                  { label: "Week 2", prefix: "W2", rawTotal: rawW2 },
+                  { label: "Week 3", prefix: "W3", rawTotal: rawW3 },
+                ] as const).map(({ label, prefix, rawTotal }, ri) => (
+                  <tr key={prefix} style={{ background: ri % 2 === 0 ? "var(--row-even)" : "var(--row-odd)" }}>
+                    <td style={{ ...tdS(), fontFamily: "var(--font-label)", fontWeight: 700, fontSize: 13, letterSpacing: "0.08em", color: "var(--accent)", whiteSpace: "nowrap" }}>
+                      {label}
+                    </td>
+                    {DAYS_OF_WEEK.map(day => (
+                      <td key={day} style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text)" }}>
+                        {dayTotals[prefix][day] || "–"}
+                      </td>
+                    ))}
+                    <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 700, color: "var(--accent)", borderLeft: "2px solid var(--border)" }}>
+                      {fmtAvg(rawTotal)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
         </div>
       </section>
 
@@ -332,22 +363,21 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
                 <YAxis
                   tick={{ fill: "#7d8590", fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }}
                   axisLine={false} tickLine={false}
+                  tickFormatter={(v: number) => (Math.round(v * 10) / 10).toFixed(1)}
                   label={{ value: "avg/day", angle: -90, position: "insideLeft", fill: "#7d8590", fontFamily: "'Barlow Condensed',sans-serif", fontSize: 11, dx: -4 }}
                 />
-                <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
+                <Tooltip
+                  contentStyle={TOOLTIP_STYLE}
+                  cursor={{ fill: "rgba(255,255,255,0.03)" }}
+                  formatter={(value: number, name: string) => [(Math.round(value * 10) / 10).toFixed(1), name]}
+                />
                 <Legend wrapperStyle={{ fontFamily: "'Barlow Condensed',sans-serif", fontSize: 12, paddingTop: 12 }} />
                 <ReferenceLine
                   y={COMPANY_CAPACITY}
                   stroke="#f0b429"
                   strokeDasharray="6 3"
                   strokeWidth={1.5}
-                  label={{
-                    value: `Cap ${COMPANY_CAPACITY}`,
-                    fill: "#f0b429",
-                    fontFamily: "'Barlow Condensed',sans-serif",
-                    fontSize: 11,
-                    position: "right",
-                  }}
+                  label={{ value: `Cap ${COMPANY_CAPACITY}`, fill: "#f0b429", fontFamily: "'Barlow Condensed',sans-serif", fontSize: 11, position: "right" }}
                 />
                 {jobKeys.map((key, i) => (
                   <Bar
@@ -367,7 +397,7 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
       {/* ── Week-over-Week Labor Shift ── */}
       {latestByJob.length > 0 && (
         <section>
-          {/* Header row with inline week-pair selector */}
+          {/* Header with inline week-pair selector */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
             <div>
               <div style={{ fontFamily: "var(--font-display)", fontSize: 18, fontWeight: 600, color: "var(--text)", letterSpacing: "0.04em", display: "flex", alignItems: "center", gap: 10 }}>
@@ -375,10 +405,9 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
                 Week-over-Week Labor Shift
               </div>
               <div style={{ fontFamily: "var(--font-label)", fontSize: 12, color: "var(--muted)", marginTop: 3, marginLeft: 13, letterSpacing: "0.04em" }}>
-                Avg daily headcount change per role · comparing {WEEK_PAIRS.find(p => p.key === weekPair)?.label}
+                Avg daily headcount change · {WEEK_PAIRS.find(p => p.key === weekPair)?.label} · categorized by net direction
               </div>
             </div>
-            {/* Week pair selector */}
             <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
               {WEEK_PAIRS.map(p => (
                 <button
@@ -404,10 +433,68 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
-            {renderTransferCol(releasing, "↓ Releasing", "#f85149", "#2a1c1c", deltaColor)}
-            {renderTransferCol(stable,    "→ Stable",    "var(--muted)", "var(--th-bg)", deltaColor)}
-            {renderTransferCol(pulling,   "↑ Pulling",   "#3fb950", "#1c2a1c", deltaColor)}
+          {/* Releasing / Stable / Pulling — each contains roles categorized by avg delta direction */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
+            {([
+              { label: "Releasing", color: "#f85149",    bg: "rgba(248,81,73,0.08)",    border: "rgba(248,81,73,0.25)",    roles: roleStats.filter(r => r.avgDelta < -0.1) },
+              { label: "Stable",    color: "var(--muted)", bg: "rgba(125,133,144,0.06)", border: "rgba(125,133,144,0.18)", roles: roleStats.filter(r => Math.abs(r.avgDelta) <= 0.1) },
+              { label: "Pulling",   color: "#3fb950",    bg: "rgba(63,185,80,0.08)",    border: "rgba(63,185,80,0.25)",    roles: roleStats.filter(r => r.avgDelta > 0.1) },
+            ] as const).map(({ label, color, bg, border, roles }) => (
+              <div key={label} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, overflow: "visible" }}>
+                {/* Container header */}
+                <div style={{ background: bg, borderBottom: `1px solid ${border}`, padding: "8px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", borderRadius: "2px 2px 0 0" }}>
+                  <span style={{ fontFamily: "var(--font-label)", fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color }}>{label}</span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color }}>{roles.length}</span>
+                </div>
+                {/* Role rows inside container */}
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  {roles.length === 0 ? (
+                    <div style={{ padding: "10px 14px", fontFamily: "var(--font-label)", fontSize: 11, color: "#3d444d", letterSpacing: "0.04em" }}>None</div>
+                  ) : roles.map((role, ri) => (
+                    <div
+                      key={role.key}
+                      style={{ position: "relative", borderTop: ri > 0 ? "1px solid var(--border-faint)" : undefined, cursor: "default" }}
+                      onMouseEnter={() => setHoveredRole(role.key)}
+                      onMouseLeave={() => setHoveredRole(null)}
+                    >
+                      {/* Compact role row: color swatch + name + delta */}
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 14px", gap: 8 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                          <span style={{ display: "inline-block", width: 3, height: 14, background: role.color, borderRadius: 1, flexShrink: 0 }} />
+                          <span style={{ fontFamily: "var(--font-label)", fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--label)" }}>{role.label}</span>
+                        </div>
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 16, fontWeight: 700, color: deltaColor(role.avgDelta) }}>
+                          {fmtDelta(role.avgDelta)}
+                        </span>
+                      </div>
+                      {/* Hover dropdown — one line per job */}
+                      {hoveredRole === role.key && role.jobDeltas.length > 0 && (
+                        <div style={{
+                          position: "absolute", top: "100%", left: 0, right: 0, zIndex: 60,
+                          background: "#1c2128", border: "1px solid var(--border)", borderRadius: 2,
+                          marginTop: 2, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", maxHeight: 240, overflowY: "auto",
+                        }}>
+                          <div style={{ padding: "5px 12px", borderBottom: "1px solid var(--border)", fontFamily: "var(--font-label)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", display: "flex", justifyContent: "space-between" }}>
+                            <span>Job · PM</span>
+                            <span>{WEEK_PAIRS.find(p => p.key === weekPair)?.label}</span>
+                          </div>
+                          {[...role.jobDeltas].sort((a, b) => a.delta - b.delta).map(({ job, pm, delta }) => (
+                            <div key={job} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 12px", borderBottom: "1px solid var(--border-faint)" }}>
+                              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text)" }}>
+                                {job}<span style={{ fontFamily: "var(--font-label)", color: "var(--muted)", fontWeight: 400 }}> · {pm}</span>
+                              </span>
+                              <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 700, color: deltaColor(delta), marginLeft: 12 }}>
+                                {fmtDelta(delta)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       )}
@@ -422,16 +509,16 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
             <thead>
               <tr>
-                <th style={thS()}         onClick={() => handleSort("job_number")}>Job #{arrow("job_number")}</th>
-                <th style={thS()}         onClick={() => handleSort("pm_name")}>PM{arrow("pm_name")}</th>
-                <th style={thS("center")} onClick={() => handleSort("W1_WeekTotal")}>Wk 1 Avg{arrow("W1_WeekTotal")}</th>
+                <th style={thSortable()}         onClick={() => handleSort("job_number")}>Job #{arrow("job_number")}</th>
+                <th style={thSortable()}         onClick={() => handleSort("pm_name")}>PM{arrow("pm_name")}</th>
+                <th style={thSortable("center")} onClick={() => handleSort("W1_WeekTotal")}>Wk 1 Avg{arrow("W1_WeekTotal")}</th>
                 <th style={thS("center")}>Conf</th>
-                <th style={thS("center")} onClick={() => handleSort("W2_WeekTotal")}>Wk 2 Avg{arrow("W2_WeekTotal")}</th>
+                <th style={thSortable("center")} onClick={() => handleSort("W2_WeekTotal")}>Wk 2 Avg{arrow("W2_WeekTotal")}</th>
                 <th style={thS("center")}>Conf</th>
-                <th style={thS("center")} onClick={() => handleSort("W3_WeekTotal")}>Wk 3 Avg{arrow("W3_WeekTotal")}</th>
+                <th style={thSortable("center")} onClick={() => handleSort("W3_WeekTotal")}>Wk 3 Avg{arrow("W3_WeekTotal")}</th>
                 <th style={thS("center")}>Conf</th>
                 <th style={thS("center")}>Wk 4+</th>
-                <th style={thS()}         onClick={() => handleSort("job_end_date")}>End Date{arrow("job_end_date")}</th>
+                <th style={thSortable()}         onClick={() => handleSort("job_end_date")}>End Date{arrow("job_end_date")}</th>
               </tr>
             </thead>
             <tbody>
@@ -503,7 +590,6 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
     );
   }
 
-  // Chart — avg daily workers per role per week
   const chartData = job ? [
     {
       week: "Week 1",
@@ -535,9 +621,7 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
         <SectionLabel text="Project View" sub="Select a job to drill down into field execution detail" />
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div style={{ flex: 1, minWidth: 220, maxWidth: 380 }}>
-            <div style={{ fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 6 }}>
-              Select Job
-            </div>
+            <div style={{ fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 6 }}>Select Job</div>
             <select
               value={selectedJob}
               onChange={e => setSelectedJob(e.target.value)}
@@ -644,16 +728,9 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={chartData} margin={{ top: 4, right: 24, left: 0, bottom: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                  <XAxis
-                    dataKey="week"
-                    tick={{ fill: "#7d8590", fontFamily: "'Barlow Condensed',sans-serif", fontSize: 13 }}
-                    axisLine={{ stroke: "#30363d" }} tickLine={false}
-                  />
-                  <YAxis
-                    tick={{ fill: "#7d8590", fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }}
-                    axisLine={false} tickLine={false}
-                    label={{ value: "avg/day", angle: -90, position: "insideLeft", fill: "#7d8590", fontFamily: "'Barlow Condensed',sans-serif", fontSize: 11, dx: -4 }}
-                  />
+                  <XAxis dataKey="week" tick={{ fill: "#7d8590", fontFamily: "'Barlow Condensed',sans-serif", fontSize: 13 }} axisLine={{ stroke: "#30363d" }} tickLine={false} />
+                  <YAxis tick={{ fill: "#7d8590", fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }} axisLine={false} tickLine={false}
+                    label={{ value: "avg/day", angle: -90, position: "insideLeft", fill: "#7d8590", fontFamily: "'Barlow Condensed',sans-serif", fontSize: 11, dx: -4 }} />
                   <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
                   <Legend wrapperStyle={{ fontFamily: "'Barlow Condensed',sans-serif", fontSize: 12, paddingTop: 12 }} />
                   <Bar dataKey="Foremen"     fill="#f0b429" radius={[2, 2, 0, 0]} />
@@ -680,7 +757,6 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
 
                 return (
                   <div key={wn} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, overflow: "hidden" }}>
-                    {/* Card header */}
                     <div style={{ background: "var(--th-bg)", borderBottom: "1px solid var(--border)", padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                       <div>
                         <div style={{ fontFamily: "var(--font-label)", fontSize: 13, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text)" }}>Week {wn}</div>
@@ -688,8 +764,6 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
                       </div>
                       <ConfBadge value={conf} />
                     </div>
-
-                    {/* Crew averages */}
                     <div style={{ padding: "14px 16px" }}>
                       <table style={{ width: "100%", borderCollapse: "collapse" }}>
                         <tbody>
@@ -715,8 +789,6 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
                         </tbody>
                       </table>
                     </div>
-
-                    {/* Notes */}
                     <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border-faint)", minHeight: 40 }}>
                       {notes
                         ? <p style={{ fontFamily: "var(--font-body)", fontSize: 12, color: "var(--label)", lineHeight: 1.55, margin: 0 }}>{notes}</p>
@@ -737,11 +809,9 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
                 sub={`${Number(job.payload?.Weeks_4_Plus_Count)} remaining week${Number(job.payload?.Weeks_4_Plus_Count) !== 1 ? "s" : ""} beyond the 3-week detail window`}
               />
               <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, padding: "16px 20px" }}>
-                <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginBottom: 12 }}>
-                  <div>
-                    <div style={{ fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 4 }}>Total Crew (Wk 4+)</div>
-                    <div style={{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 700, color: "var(--text)" }}>{Number(job.payload?.Weeks_4_Plus_Total_Crew)}</div>
-                  </div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 4 }}>Total Crew (Wk 4+)</div>
+                  <div style={{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 700, color: "var(--text)" }}>{Number(job.payload?.Weeks_4_Plus_Total_Crew)}</div>
                 </div>
                 {job.payload?.Weeks_4_Plus_Summary && String(job.payload.Weeks_4_Plus_Summary) !== "N/A" && (
                   <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", lineHeight: 1.8, wordBreak: "break-word" }}>
@@ -753,7 +823,6 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
               </div>
             </section>
           )}
-
         </>
       )}
     </div>
@@ -805,9 +874,7 @@ export default function Dashboard() {
     <div style={{ background: "#0d1117", minHeight: "100vh", padding: 32 }}>
       <style>{CSS}</style>
       <div style={{ color: "#ff7b72", fontFamily: "var(--font-body)", fontSize: 14, marginBottom: 12 }}>Error: {error}</div>
-      <button onClick={fetchData} style={{ background: "#f0b429", border: "none", borderRadius: 2, padding: "8px 16px", cursor: "pointer", fontFamily: "var(--font-label)", fontWeight: 700, fontSize: 12, color: "#0d1117" }}>
-        Retry
-      </button>
+      <button onClick={fetchData} style={{ background: "#f0b429", border: "none", borderRadius: 2, padding: "8px 16px", cursor: "pointer", fontFamily: "var(--font-label)", fontWeight: 700, fontSize: 12, color: "#0d1117" }}>Retry</button>
     </div>
   );
 
@@ -816,16 +883,8 @@ export default function Dashboard() {
       <style>{CSS}</style>
 
       {/* ── Sticky Header ── */}
-      <div style={{
-        background: "linear-gradient(135deg,#0d1117 0%,#161b22 100%)",
-        borderBottom: "3px solid var(--accent)",
-        position: "sticky",
-        top: 0,
-        zIndex: 100,
-      }}>
+      <div style={{ background: "linear-gradient(135deg,#0d1117 0%,#161b22 100%)", borderBottom: "3px solid var(--accent)", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: "20px 32px 0" }}>
-
-          {/* Title row */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 18 }}>
             <div>
               <div style={{ fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.2em", color: "var(--accent)", textTransform: "uppercase", marginBottom: 4 }}>Electrical Contractor</div>
@@ -833,50 +892,38 @@ export default function Dashboard() {
               <div style={{ fontFamily: "var(--font-label)", fontSize: 12, color: "var(--muted)", marginTop: 4, letterSpacing: "0.06em" }}>Manpower Forecast Dashboard — Aggregated from PM Submissions</div>
             </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", paddingTop: 4 }}>
-              <button
-                onClick={fetchData}
-                style={{ background: "transparent", border: "1px solid var(--border)", borderRadius: 2, color: "var(--muted)", cursor: "pointer", fontFamily: "var(--font-label)", fontWeight: 700, fontSize: 12, letterSpacing: "0.08em", padding: "8px 16px" }}
-              >
+              <button onClick={fetchData} style={{ background: "transparent", border: "1px solid var(--border)", borderRadius: 2, color: "var(--muted)", cursor: "pointer", fontFamily: "var(--font-label)", fontWeight: 700, fontSize: 12, letterSpacing: "0.08em", padding: "8px 16px" }}>
                 ↻ Refresh
               </button>
-              <a
-                href="#/"
-                style={{ background: "var(--accent)", color: "#0d1117", borderRadius: 2, padding: "8px 16px", fontFamily: "var(--font-label)", fontWeight: 700, fontSize: 12, letterSpacing: "0.08em", textDecoration: "none" }}
-              >
+              <a href="#/" style={{ background: "var(--accent)", color: "#0d1117", borderRadius: 2, padding: "8px 16px", fontFamily: "var(--font-label)", fontWeight: 700, fontSize: 12, letterSpacing: "0.08em", textDecoration: "none" }}>
                 ← Submit Form
               </a>
             </div>
           </div>
-
-          {/* Tab bar */}
           <div style={{ display: "flex", gap: 2 }}>
-            {(["portfolio", "project"] as const).map(tab => {
-              const active = activeTab === tab;
-              return (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  style={{
-                    background: active ? "var(--accent)" : "transparent",
-                    border: "none",
-                    borderRadius: "2px 2px 0 0",
-                    color: active ? "#0d1117" : "var(--muted)",
-                    cursor: "pointer",
-                    fontFamily: "var(--font-label)",
-                    fontWeight: 700,
-                    fontSize: 12,
-                    letterSpacing: "0.1em",
-                    textTransform: "uppercase",
-                    padding: "9px 22px",
-                    transition: "all 0.15s",
-                  }}
-                >
-                  {tab === "portfolio" ? "Portfolio View" : "Project View"}
-                </button>
-              );
-            })}
+            {(["portfolio", "project"] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                style={{
+                  background: activeTab === tab ? "var(--accent)" : "transparent",
+                  border: "none",
+                  borderRadius: "2px 2px 0 0",
+                  color: activeTab === tab ? "#0d1117" : "var(--muted)",
+                  cursor: "pointer",
+                  fontFamily: "var(--font-label)",
+                  fontWeight: 700,
+                  fontSize: 12,
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  padding: "9px 22px",
+                  transition: "all 0.15s",
+                }}
+              >
+                {tab === "portfolio" ? "Portfolio View" : "Project View"}
+              </button>
+            ))}
           </div>
-
         </div>
       </div>
 
