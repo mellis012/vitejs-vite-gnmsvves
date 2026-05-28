@@ -59,15 +59,32 @@ const DAYS_OF_WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 type DayOfWeek = typeof DAYS_OF_WEEK[number];
 
 // ── Average / delta helpers ─────────────────────────────────────────────────
-// Payload _Total fields are sums of Mon–Fri (5 days). Dividing by 5 gives the
-// avg number of workers on any given day — a much more intuitive headcount.
-const avgNum = (total: number) => total / 7;
+const avgNum = (total: number) => total / 7; // kept for week-over-week delta math
 
-const fmtAvg = (total: number): string => {
-  const v = Math.round((total / 7) * 10) / 10;
-  if (v === 0) return "–";
-  return v % 1 === 0 ? String(v) : v.toFixed(1);
+// Avg per active (non-zero) day from an array of per-day values
+const avgActive = (vals: number[]): number => {
+  const pos = vals.filter(v => v > 0);
+  return pos.length > 0 ? pos.reduce((s, v) => s + v, 0) / pos.length : 0;
 };
+
+// Format an already-computed avg value
+const fmtAvg = (v: number): string => {
+  const r = Math.round(v * 10) / 10;
+  if (r === 0) return "–";
+  return r % 1 === 0 ? String(r) : r.toFixed(1);
+};
+
+// Avg workers per active day from a payload — all roles combined, or a specific roleTag ("FO"|"JO"|"AP")
+const payloadAvgActive = (payload: Payload | null, week: string, roleTag?: string): number =>
+  avgActive(
+    DAYS_OF_WEEK.map(day =>
+      roleTag
+        ? (Number(payload?.[`${week}_${roleTag}_${day}`]) || 0)
+        : (Number(payload?.[`${week}_FO_${day}`]) || 0)
+          + (Number(payload?.[`${week}_JO_${day}`]) || 0)
+          + (Number(payload?.[`${week}_AP_${day}`]) || 0)
+    )
+  );
 
 // Format a value already in avg units (already ÷ 5)
 const fmtDelta = (v: number): string => {
@@ -168,10 +185,6 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
   const [weekPair,    setWeekPair]    = useState<WeekPairKey>("W1-W2");
   const [hoveredRole, setHoveredRole] = useState<string | null>(null);
 
-  // Raw weekly totals (sum of 5-day role entries across all jobs)
-  const rawW1 = latestByJob.reduce((s, r) => s + (Number(r.payload?.W1_WeekTotal) || 0), 0);
-  const rawW2 = latestByJob.reduce((s, r) => s + (Number(r.payload?.W2_WeekTotal) || 0), 0);
-  const rawW3 = latestByJob.reduce((s, r) => s + (Number(r.payload?.W3_WeekTotal) || 0), 0);
   // Per-day company-wide totals for all three weeks
   const dayTotals = useMemo(() => {
     const result: Record<string, Record<DayOfWeek, number>> = {
@@ -208,7 +221,7 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
       const entry: Record<string, string | number> = { weekLabel: labels[wi] };
       latestByJob.forEach(r => {
         const key = r.job_number || String(r.id);
-        entry[key] = avgNum(Number(r.payload?.[`${w}_WeekTotal`]) || 0);
+        entry[key] = payloadAvgActive(r.payload, w);
       });
       return entry;
     }),
@@ -300,10 +313,10 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
               </thead>
               <tbody>
                 {([
-                  { label: "Week 1", prefix: "W1", rawTotal: rawW1 },
-                  { label: "Week 2", prefix: "W2", rawTotal: rawW2 },
-                  { label: "Week 3", prefix: "W3", rawTotal: rawW3 },
-                ] as const).map(({ label, prefix, rawTotal }, ri) => (
+                  { label: "Week 1", prefix: "W1" },
+                  { label: "Week 2", prefix: "W2" },
+                  { label: "Week 3", prefix: "W3" },
+                ] as const).map(({ label, prefix }, ri) => (
                   <tr key={prefix} style={{ background: ri % 2 === 0 ? "var(--row-even)" : "var(--row-odd)" }}>
                     <td style={{ ...tdS(), fontFamily: "var(--font-label)", fontWeight: 700, fontSize: 13, letterSpacing: "0.08em", color: "var(--accent)", whiteSpace: "nowrap" }}>
                       {label}
@@ -314,7 +327,7 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
                       </td>
                     ))}
                     <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 700, color: "var(--accent)", borderLeft: "2px solid var(--border)" }}>
-                      {fmtAvg(rawTotal)}
+                      {fmtAvg(avgActive(DAYS_OF_WEEK.map(d => dayTotals[prefix][d])))}
                     </td>
                   </tr>
                 ))}
@@ -510,11 +523,11 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
                   <tr key={r.id} style={{ background: i % 2 === 0 ? "var(--row-even)" : "var(--row-odd)" }}>
                     <td style={{ ...tdS(), borderLeft: `3px solid ${confBorderColor}`, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text)" }}>{r.job_number}</td>
                     <td style={{ ...tdS(), fontFamily: "var(--font-label)", fontSize: 12, color: "var(--label)" }}>{r.pm_name}</td>
-                    <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: "var(--accent)" }}>{fmtAvg(Number(r.payload?.W1_WeekTotal) || 0)}</td>
+                    <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: "var(--accent)" }}>{fmtAvg(payloadAvgActive(r.payload, "W1"))}</td>
                     <td style={{ ...tdS("center") }}><ConfBadge value={w1Conf} /></td>
-                    <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text)" }}>{fmtAvg(Number(r.payload?.W2_WeekTotal) || 0)}</td>
+                    <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text)" }}>{fmtAvg(payloadAvgActive(r.payload, "W2"))}</td>
                     <td style={{ ...tdS("center") }}><ConfBadge value={String(r.payload?.W2_Confidence || "")} /></td>
-                    <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text)" }}>{fmtAvg(Number(r.payload?.W3_WeekTotal) || 0)}</td>
+                    <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text)" }}>{fmtAvg(payloadAvgActive(r.payload, "W3"))}</td>
                     <td style={{ ...tdS("center") }}><ConfBadge value={String(r.payload?.W3_Confidence || "")} /></td>
                     <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted)" }}>{Number(r.payload?.Weeks_4_Plus_Total_Crew) || "–"}</td>
                     <td style={{ ...tdS(), fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>
@@ -574,21 +587,21 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
   const chartData = job ? [
     {
       week: "Week 1",
-      Foremen:     avgNum(Number(job.payload?.W1_FO_Total) || 0),
-      Journeymen:  avgNum(Number(job.payload?.W1_JO_Total) || 0),
-      Apprentices: avgNum(Number(job.payload?.W1_AP_Total) || 0),
+      Foremen:     payloadAvgActive(job.payload, "W1", "FO"),
+      Journeymen:  payloadAvgActive(job.payload, "W1", "JO"),
+      Apprentices: payloadAvgActive(job.payload, "W1", "AP"),
     },
     {
       week: "Week 2",
-      Foremen:     avgNum(Number(job.payload?.W2_FO_Total) || 0),
-      Journeymen:  avgNum(Number(job.payload?.W2_JO_Total) || 0),
-      Apprentices: avgNum(Number(job.payload?.W2_AP_Total) || 0),
+      Foremen:     payloadAvgActive(job.payload, "W2", "FO"),
+      Journeymen:  payloadAvgActive(job.payload, "W2", "JO"),
+      Apprentices: payloadAvgActive(job.payload, "W2", "AP"),
     },
     {
       week: "Week 3",
-      Foremen:     avgNum(Number(job.payload?.W3_FO_Total) || 0),
-      Journeymen:  avgNum(Number(job.payload?.W3_JO_Total) || 0),
-      Apprentices: avgNum(Number(job.payload?.W3_AP_Total) || 0),
+      Foremen:     payloadAvgActive(job.payload, "W3", "FO"),
+      Journeymen:  payloadAvgActive(job.payload, "W3", "JO"),
+      Apprentices: payloadAvgActive(job.payload, "W3", "AP"),
     },
   ] : [];
 
@@ -670,7 +683,7 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
             </div>
             <div>
               <div style={{ fontFamily: "var(--font-label)", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 3 }}>Wk 1 Avg/Day</div>
-              <div style={{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 700, color: "var(--text)" }}>{fmtAvg(Number(job.payload?.W1_WeekTotal) || 0)}</div>
+              <div style={{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 700, color: "var(--text)" }}>{fmtAvg(payloadAvgActive(job.payload, "W1"))}</div>
             </div>
             <div>
               <div style={{ fontFamily: "var(--font-label)", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 6 }}>Wk 1 Confidence</div>
@@ -731,10 +744,6 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
                 const dates = String(job.payload?.[`${w}_Dates`]      || "");
                 const conf  = String(job.payload?.[`${w}_Confidence`] || "");
                 const notes = String(job.payload?.[`${w}_Notes`]      || "");
-                const fo    = Number(job.payload?.[`${w}_FO_Total`])  || 0;
-                const jo    = Number(job.payload?.[`${w}_JO_Total`])  || 0;
-                const ap    = Number(job.payload?.[`${w}_AP_Total`])  || 0;
-                const tot   = fo + jo + ap;
 
                 return (
                   <div key={wn} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, overflow: "hidden" }}>
@@ -749,9 +758,9 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
                       <table style={{ width: "100%", borderCollapse: "collapse" }}>
                         <tbody>
                           {[
-                            { role: "Foremen",     color: "#f0b429", raw: fo },
-                            { role: "Journeymen",  color: "#3b82f6", raw: jo },
-                            { role: "Apprentices", color: "#10b981", raw: ap },
+                            { role: "Foremen",     color: "#f0b429", tag: "FO" },
+                            { role: "Journeymen",  color: "#3b82f6", tag: "JO" },
+                            { role: "Apprentices", color: "#10b981", tag: "AP" },
                           ].map(row => (
                             <tr key={row.role}>
                               <td style={{ padding: "4px 0", fontFamily: "var(--font-label)", fontSize: 12, color: "var(--label)" }}>
@@ -759,13 +768,13 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
                                 {row.role}
                               </td>
                               <td style={{ padding: "4px 0", textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
-                                {fmtAvg(row.raw)}
+                                {fmtAvg(payloadAvgActive(job.payload, w, row.tag))}
                               </td>
                             </tr>
                           ))}
                           <tr style={{ borderTop: "1px solid var(--border-faint)" }}>
                             <td style={{ padding: "6px 0 2px", fontFamily: "var(--font-label)", fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Avg Total/Day</td>
-                            <td style={{ padding: "6px 0 2px", textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: "var(--accent)" }}>{fmtAvg(tot)}</td>
+                            <td style={{ padding: "6px 0 2px", textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: "var(--accent)" }}>{fmtAvg(payloadAvgActive(job.payload, w))}</td>
                           </tr>
                         </tbody>
                       </table>

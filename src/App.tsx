@@ -177,9 +177,25 @@ function WeekGrid({ weekLabel, weekNum, data, onChange, disabled,
   notes: string;
   onNotesChange: (value: string) => void;
 }) {
-  const colTotal   = (day: string) => ROLES.reduce((s, r) => s + (parseInt(data[r][day]) || 0), 0);
-  const rowTotal   = (role: string) => DAYS.reduce((s, d) => s + (parseInt(data[role][d]) || 0), 0);
-  const grandTotal = DAYS.reduce((s, d) => s + colTotal(d), 0);
+  const colTotal = (day: string) => ROLES.reduce((s, r) => s + (parseInt(data[r][day]) || 0), 0);
+
+  // Average per active (non-zero) day for a role row
+  const rowAvg = (role: string): string => {
+    const vals = DAYS.map(d => parseInt(data[role][d]) || 0).filter(v => v > 0);
+    if (vals.length === 0) return "–";
+    const avg = vals.reduce((s, v) => s + v, 0) / vals.length;
+    const r = Math.round(avg * 10) / 10;
+    return r % 1 === 0 ? String(r) : r.toFixed(1);
+  };
+
+  // Average of daily totals over active (non-zero) days
+  const grandAvg = (): string => {
+    const dailies = DAYS.map(d => colTotal(d)).filter(v => v > 0);
+    if (dailies.length === 0) return "–";
+    const avg = dailies.reduce((s, v) => s + v, 0) / dailies.length;
+    const r = Math.round(avg * 10) / 10;
+    return r % 1 === 0 ? String(r) : r.toFixed(1);
+  };
 
   return (
     <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, overflow: "hidden", marginBottom: 20 }}>
@@ -197,7 +213,7 @@ function WeekGrid({ weekLabel, weekNum, data, onChange, disabled,
             <tr style={{ background: "var(--th-bg)" }}>
               <th style={thS("left")}>Role</th>
               {DAYS.map(d => <th key={d} style={thS("center")}>{d}</th>)}
-              <th style={{ ...thS("center"), color: "var(--accent)", borderLeft: "1px solid var(--border)" }}>Total</th>
+              <th style={{ ...thS("center"), color: "var(--accent)", borderLeft: "1px solid var(--border)" }}>Avg/Day</th>
               <th style={{ ...thS("center"), borderLeft: "1px solid var(--border)", minWidth: 80 }}>Confidence</th>
             </tr>
           </thead>
@@ -215,7 +231,7 @@ function WeekGrid({ weekLabel, weekNum, data, onChange, disabled,
                   </td>
                 ))}
                 <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: "var(--accent)", borderLeft: "1px solid var(--border)", background: "var(--total-col)" }}>
-                  {rowTotal(role) || "–"}
+                  {rowAvg(role)}
                 </td>
                 {/* Confidence column — spans all 3 role rows */}
                 {ri === 0 && (
@@ -258,7 +274,7 @@ function WeekGrid({ weekLabel, weekNum, data, onChange, disabled,
                 </td>
               ))}
               <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: "var(--accent)", borderLeft: "1px solid var(--border)", background: "var(--total-col)" }}>
-                {grandTotal || "–"}
+                {grandAvg()}
               </td>
               {/* Placeholder to keep column count consistent */}
               <td style={{ borderLeft: "1px solid var(--border)", background: "var(--total-row)" }} />
