@@ -4,38 +4,19 @@ import { supabase } from "./lib/supabase";
 const DAYS  = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const ROLES = ["Foremen", "Journeymen", "Apprentices"];
 
-// ─── Edit this list to add / remove Project Managers ──────────────────────
-const PM_NAMES = [
-  "Bill Ellis",
-  "Mike Ellis",
-  "Shawn Pichoff",
-  "Keith Schexnaildre",
-  "Ed Stein",
-  "Matt Sutor",
-  "Troy Vallotton",
-];
-// ──────────────────────────────────────────────────────────────────────────
+type JobRecord = {
+  job_number: string;
+  project_manager: string;
+  schedule: string;
+  required_certifications: string[];
+  local_union: string;
+};
 
 const CONFIDENCE = [
   { label: "LOW",  value: "Low",    color: "#f85149" },
   { label: "MED",  value: "Medium", color: "#f0b429" },
   { label: "HIGH", value: "High",   color: "#3fb950" },
 ] as const;
-
-const QUALIFICATIONS = [
-  { key: "Background_Check", label: "Background Check" },
-  { key: "OSHA_10",          label: "OSHA 10"          },
-  { key: "OSHA_30",          label: "OSHA 30"          },
-  { key: "First_Aid_CPR",    label: "First Aid / CPR"  },
-  { key: "Aerial_Lift",      label: "Aerial Lift"      },
-  { key: "Confined_Space",   label: "Confined Space"   },
-  { key: "Arc_Flash",        label: "Arc Flash"        },
-  { key: "Forklift",         label: "Forklift"         },
-] as const;
-
-type QualKey = typeof QUALIFICATIONS[number]["key"];
-const emptyQuals = (): Record<QualKey, boolean> =>
-  Object.fromEntries(QUALIFICATIONS.map(q => [q.key, false])) as Record<QualKey, boolean>;
 
 // ── Utility functions ──────────────────────────────────────────────────────
 function getMonday(date: Date | string): Date {
@@ -81,7 +62,7 @@ function buildPayload({
   pmName, jobNumber, jobEndDate,
   week1Notes, week2Notes, week3Notes,
   week1Confidence, week2Confidence, week3Confidence,
-  qualifications,
+  jobSchedule, jobCertifications, jobLocalUnion,
   week1, week2, week3,
   remainingWeeks, remainingWeekDefs,
   thisMonday, week2Monday, week3Monday,
@@ -95,7 +76,9 @@ function buildPayload({
   week1Confidence: string;
   week2Confidence: string;
   week3Confidence: string;
-  qualifications: Record<QualKey, boolean>;
+  jobSchedule: string;
+  jobCertifications: string[];
+  jobLocalUnion: string;
   week1: Record<string, Record<string, string>>;
   week2: Record<string, Record<string, string>>;
   week3: Record<string, Record<string, string>>;
@@ -135,7 +118,13 @@ function buildPayload({
     Weeks_4_Plus_Total_Crew: remainingWeekDefs.reduce(
       (s, wk) => s + (parseInt(remainingWeeks[`wk${wk.num}`]) || 0), 0
     ),
-    ...Object.fromEntries(QUALIFICATIONS.map(q => [`Q_${q.key}`, qualifications[q.key] ? 1 : 0])),
+    // Individual crew counts per remaining week — used for next-week prefill shifting
+    ...Object.fromEntries(remainingWeekDefs.map(wk =>
+      [`Remaining_Wk${wk.num}_Crew`, parseInt(remainingWeeks[`wk${wk.num}`]) || 0]
+    )),
+    Job_Schedule:       jobSchedule,
+    Job_Certifications: jobCertifications.join(", "),
+    Job_LocalUnion:     jobLocalUnion,
   };
 }
 
@@ -165,10 +154,11 @@ const textInput: React.CSSProperties = {
 };
 
 // ── WeekGrid ───────────────────────────────────────────────────────────────
-function WeekGrid({ weekLabel, weekNum, data, onChange, disabled,
+function WeekGrid({ weekLabel, weekNum, monday, data, onChange, disabled,
                     confidence, onConfidenceChange, notes, onNotesChange }: {
   weekLabel: string;
   weekNum: string;
+  monday: Date;
   data: Record<string, Record<string, string>>;
   onChange: (role: string, day: string, value: string) => void;
   disabled: boolean;
@@ -212,7 +202,16 @@ function WeekGrid({ weekLabel, weekNum, data, onChange, disabled,
           <thead>
             <tr style={{ background: "var(--th-bg)" }}>
               <th style={thS("left")}>Role</th>
-              {DAYS.map(d => <th key={d} style={thS("center")}>{d}</th>)}
+              {DAYS.map((d, i) => {
+                const dt = addDays(monday, i);
+                const label = `${dt.getMonth() + 1}/${dt.getDate()}`;
+                return (
+                  <th key={d} style={thS("center")}>
+                    <div>{d}</div>
+                    <div style={{ fontWeight: 400, fontSize: 10, opacity: 0.65, marginTop: 1 }}>{label}</div>
+                  </th>
+                );
+              })}
               <th style={{ ...thS("center"), color: "var(--accent)", borderLeft: "1px solid var(--border)" }}>Avg/Day</th>
               <th style={{ ...thS("center"), borderLeft: "1px solid var(--border)", minWidth: 80 }}>Confidence</th>
             </tr>
@@ -361,17 +360,28 @@ export default function CrewForm() {
   const [week2Confidence, setWeek2Confidence] = useState("");
   const [week3Confidence, setWeek3Confidence] = useState("");
 
-  const [qualifications, setQualifications] = useState<Record<QualKey, boolean>>(emptyQuals);
-  const [remainingWeeks, setRemainingWeeks] = useState<Record<string, string>>({});
-  const [submitStatus,   setSubmitStatus]   = useState<string | null>(null);
-  const [errorMsg,       setErrorMsg]       = useState("");
-  const [qualsLoading,   setQualsLoading]   = useState(false);
+  const [jobsList,        setJobsList]        = useState<JobRecord[]>([]);
+  const [selectedJobInfo, setSelectedJobInfo] = useState<JobRecord | null>(null);
+  const [remainingWeeks,  setRemainingWeeks]  = useState<Record<string, string>>({});
+  const [submitStatus,    setSubmitStatus]    = useState<string | null>(null);
+  const [errorMsg,        setErrorMsg]        = useState("");
+  const [prefillLoading,  setPrefillLoading]  = useState(false);
 
-  // Auto-populate the full form when a known job number is typed
+  // Load active jobs list on mount
   useEffect(() => {
-    if (!jobNumber || jobNumber.trim().length < 2) return;
+    supabase
+      .from("jobs")
+      .select("job_number, project_manager, schedule, required_certifications, local_union")
+      .is("archived_at", null)
+      .order("job_number")
+      .then(({ data }) => { if (data) setJobsList(data as JobRecord[]); });
+  }, []);
+
+  // Auto-populate week grids / notes / confidence / end date from previous submission
+  useEffect(() => {
+    if (!jobNumber) return;
     const timer = setTimeout(async () => {
-      setQualsLoading(true);
+      setPrefillLoading(true);
       const { data } = await supabase
         .from("manpower_reports")
         .select("payload, job_end_date")
@@ -381,13 +391,6 @@ export default function CrewForm() {
       if (data?.[0]) {
         const row = data[0] as { payload: Record<string, unknown>; job_end_date: string | null };
         const p = row.payload;
-
-        // Qualifications
-        setQualifications(
-          Object.fromEntries(
-            QUALIFICATIONS.map(q => [q.key, Boolean(p[`Q_${q.key}`])])
-          ) as Record<QualKey, boolean>
-        );
 
         // Week grids — shift forward based on weeks elapsed since last submission
         const submittedAt = p.Submission_Timestamp ? String(p.Submission_Timestamp) : null;
@@ -439,9 +442,46 @@ export default function CrewForm() {
 
         // Job end date
         if (row.job_end_date) setJobEndDate(row.job_end_date);
+
+        // Remaining weeks (4+): shift forward by weekDiff
+        // Supports new format (Remaining_Wk{n}_Crew keys) and old format (parsed from summary)
+        if (row.job_end_date) {
+          // Parse old summary format as fallback: "Wk4 (Jun 22 – Jun 28): 5 | Wk5 ..."
+          const summaryCrewByWk: Record<number, number> = {};
+          const summary = String(p.Weeks_4_Plus_Summary || "");
+          let sm: RegExpExecArray | null;
+          const summaryRe = /Wk(\d+)[^:]+:\s*(\d+)/g;
+          while ((sm = summaryRe.exec(summary)) !== null) {
+            summaryCrewByWk[parseInt(sm[1])] = parseInt(sm[2]);
+          }
+          const prevCrew = (wkNum: number): number => {
+            const v = p[`Remaining_Wk${wkNum}_Crew`];
+            return v !== undefined ? Number(v) || 0 : (summaryCrewByWk[wkNum] ?? 0);
+          };
+
+          const endDate = new Date(row.job_end_date + "T00:00:00");
+          const currWk4Start = addWeeks(thisMonday, 3);
+          const shifted: Record<string, string> = {};
+          let wkStart = new Date(currWk4Start);
+          let wkNum = 4;
+          while (wkStart <= endDate) {
+            const crew = prevCrew(wkNum + weekDiff);
+            if (crew > 0) shifted[`wk${wkNum}`] = String(crew);
+            wkStart = addWeeks(wkStart, 1);
+            wkNum++;
+          }
+          setRemainingWeeks(shifted);
+        }
+      } else {
+        // No previous submission for this job — clear all carried-over data
+        setWeek1(emptyWeekGrid()); setWeek2(emptyWeekGrid()); setWeek3(emptyWeekGrid());
+        setWeek1Confidence(""); setWeek2Confidence(""); setWeek3Confidence("");
+        setWeek1Notes(""); setWeek2Notes(""); setWeek3Notes("");
+        setJobEndDate("");
+        setRemainingWeeks({});
       }
-      setQualsLoading(false);
-    }, 600);
+      setPrefillLoading(false);
+    }, 100);
     return () => clearTimeout(timer);
   }, [jobNumber]);
 
@@ -462,12 +502,19 @@ export default function CrewForm() {
     (role: string, day: string, val: string) =>
       setter(prev => ({ ...prev, [role]: { ...prev[role], [day]: val } }));
 
+  const handleJobSelect = (num: string) => {
+    setJobNumber(num);
+    const job = jobsList.find(j => j.job_number === num) ?? null;
+    setSelectedJobInfo(job);
+    setPmName(job?.project_manager ?? "");
+  };
+
   const handleReset = () => {
     setPmName(""); setJobNumber(""); setJobEndDate("");
+    setSelectedJobInfo(null);
     setWeek1(emptyWeekGrid()); setWeek2(emptyWeekGrid()); setWeek3(emptyWeekGrid());
     setWeek1Notes(""); setWeek2Notes(""); setWeek3Notes("");
     setWeek1Confidence(""); setWeek2Confidence(""); setWeek3Confidence("");
-    setQualifications(emptyQuals());
     setRemainingWeeks({}); setSubmitStatus(null);
   };
 
@@ -483,7 +530,9 @@ export default function CrewForm() {
       pmName, jobNumber, jobEndDate,
       week1Notes, week2Notes, week3Notes,
       week1Confidence, week2Confidence, week3Confidence,
-      qualifications,
+      jobSchedule:       selectedJobInfo?.schedule            ?? "",
+      jobCertifications: selectedJobInfo?.required_certifications ?? [],
+      jobLocalUnion:     selectedJobInfo?.local_union          ?? "",
       week1, week2, week3,
       remainingWeeks, remainingWeekDefs,
       thisMonday, week2Monday, week3Monday,
@@ -561,14 +610,18 @@ export default function CrewForm() {
         <section style={{ marginBottom: 32 }}>
           <SectionLabel text="Job Information" />
           <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, padding: "20px 24px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 16 }}>
 
-              {/* PM Name — dropdown */}
+            {/* Job Number + End Date */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 16 }}>
+
+              {/* Job Number — dropdown from jobs table */}
               <div>
-                <label style={fieldLabel}>Project Manager <span style={{ color: "var(--accent)" }}>*</span></label>
+                <label style={fieldLabel}>
+                  Job Number <span style={{ color: "var(--accent)" }}>*</span>
+                </label>
                 <select
-                  value={pmName}
-                  onChange={e => setPmName(e.target.value)}
+                  value={jobNumber}
+                  onChange={e => handleJobSelect(e.target.value)}
                   disabled={busy}
                   style={{
                     ...textInput,
@@ -581,77 +634,82 @@ export default function CrewForm() {
                     opacity: busy ? 0.5 : 1,
                   }}
                 >
-                  <option value="">Select a PM…</option>
-                  {PM_NAMES.map(name => <option key={name} value={name}>{name}</option>)}
+                  <option value="">Select a job…</option>
+                  {jobsList.map(j => (
+                    <option key={j.job_number} value={j.job_number}>{j.job_number}</option>
+                  ))}
                 </select>
-              </div>
-
-              {/* Job Number */}
-              <div>
-                <label style={fieldLabel}>Job Number <span style={{ color: "var(--accent)" }}>*</span></label>
-                <input
-                  type="text" value={jobNumber} placeholder="e.g. 2026-047" disabled={busy}
-                  onChange={e => setJobNumber(e.target.value)}
-                  style={textInput}
-                />
               </div>
 
               {/* Job End Date */}
               <div>
-                <label style={fieldLabel}>Updated Job End Date <span style={{ color: "var(--accent)" }}>*</span></label>
+                <label style={fieldLabel}>
+                  Updated Job End Date <span style={{ color: "var(--accent)" }}>*</span>
+                </label>
                 <input
-                  type="date" value={jobEndDate} disabled={busy}
+                  type="date" value={jobEndDate} disabled={busy || !jobNumber}
                   onChange={e => setJobEndDate(e.target.value)}
-                  style={{ ...textInput, fontFamily: "var(--font-mono)" }}
+                  style={{ ...textInput, fontFamily: "var(--font-mono)", opacity: (!jobNumber || busy) ? 0.5 : 1 }}
                 />
               </div>
 
             </div>
 
-            {/* Required Worker Qualifications */}
-            <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border-faint)" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                <label style={{ ...fieldLabel, marginBottom: 0 }}>Required Worker Qualifications</label>
-                {qualsLoading && (
-                  <span style={{ fontFamily: "var(--font-label)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.06em" }}>
-                    loading…
-                  </span>
-                )}
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "8px 16px" }}>
-                {QUALIFICATIONS.map(q => (
-                  <label
-                    key={q.key}
-                    style={{ display: "flex", alignItems: "center", gap: 8, cursor: busy ? "not-allowed" : "pointer", userSelect: "none" }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={qualifications[q.key] ?? false}
-                      onChange={e => setQualifications(prev => ({ ...prev, [q.key]: e.target.checked }))}
-                      disabled={busy}
-                      style={{ display: "none" }}
-                    />
-                    {/* Custom checkbox */}
-                    <span style={{
-                      display: "inline-flex", alignItems: "center", justifyContent: "center",
-                      width: 16, height: 16, flexShrink: 0, borderRadius: 2, transition: "all 0.15s",
-                      border: `1px solid ${qualifications[q.key] ? "var(--accent)" : "var(--border)"}`,
-                      background: qualifications[q.key] ? "var(--accent)" : "transparent",
-                      opacity: busy ? 0.5 : 1,
-                    }}>
-                      {qualifications[q.key] && (
-                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                          <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="#0d1117" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
+            {/* Job details panel — revealed after a job is selected */}
+            {selectedJobInfo && (
+              <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border-faint)" }}>
+
+                {/* PM · Schedule · Local Union */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "10px 24px", marginBottom: 14 }}>
+                  <div>
+                    <div style={{ ...fieldLabel, marginBottom: 3 }}>Project Manager</div>
+                    <div style={{ fontFamily: "var(--font-body)", fontSize: 14, color: "var(--text)" }}>
+                      {selectedJobInfo.project_manager || "—"}
+                      {prefillLoading && (
+                        <span style={{ fontFamily: "var(--font-label)", fontSize: 10, color: "var(--muted)", marginLeft: 8 }}>loading…</span>
                       )}
-                    </span>
-                    <span style={{ fontFamily: "var(--font-label)", fontSize: 12, color: "var(--label)", letterSpacing: "0.04em" }}>
-                      {q.label}
-                    </span>
-                  </label>
-                ))}
+                    </div>
+                  </div>
+                  {selectedJobInfo.schedule && (
+                    <div>
+                      <div style={{ ...fieldLabel, marginBottom: 3 }}>Schedule</div>
+                      <div style={{ fontFamily: "var(--font-body)", fontSize: 14, color: "var(--text)" }}>{selectedJobInfo.schedule}</div>
+                    </div>
+                  )}
+                  {selectedJobInfo.local_union && (
+                    <div>
+                      <div style={{ ...fieldLabel, marginBottom: 3 }}>Local Union</div>
+                      <div style={{ fontFamily: "var(--font-body)", fontSize: 14, color: "var(--text)" }}>{selectedJobInfo.local_union}</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Required Certifications */}
+                {selectedJobInfo.required_certifications.length > 0 && (
+                  <div>
+                    <div style={{ ...fieldLabel, marginBottom: 8 }}>Required Certifications</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {selectedJobInfo.required_certifications.map(cert => (
+                        <span key={cert} style={{
+                          background: "rgba(240,180,41,0.1)",
+                          border: "1px solid rgba(240,180,41,0.3)",
+                          borderRadius: 3,
+                          padding: "3px 10px",
+                          fontFamily: "var(--font-label)",
+                          fontSize: 11,
+                          letterSpacing: "0.07em",
+                          color: "var(--accent)",
+                          textTransform: "uppercase" as React.CSSProperties["textTransform"],
+                        }}>
+                          {cert}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
               </div>
-            </div>
+            )}
 
           </div>
         </section>
@@ -660,19 +718,19 @@ export default function CrewForm() {
         <section style={{ marginBottom: 8 }}>
           <SectionLabel text="Three-Week Daily Crew Breakdown" sub="Enter the number of each crew type needed per day" />
           <WeekGrid
-            weekLabel={fmtWeekLabel(thisMonday)} weekNum="Week 1 — Next Week"
+            weekLabel={fmtWeekLabel(thisMonday)} weekNum="Week 1 — Next Week" monday={thisMonday}
             data={week1} onChange={handleWeekChange(setWeek1)} disabled={busy}
             confidence={week1Confidence} onConfidenceChange={setWeek1Confidence}
             notes={week1Notes} onNotesChange={setWeek1Notes}
           />
           <WeekGrid
-            weekLabel={fmtWeekLabel(week2Monday)} weekNum="Week 2 — Following Week"
+            weekLabel={fmtWeekLabel(week2Monday)} weekNum="Week 2 — Following Week" monday={week2Monday}
             data={week2} onChange={handleWeekChange(setWeek2)} disabled={busy}
             confidence={week2Confidence} onConfidenceChange={setWeek2Confidence}
             notes={week2Notes} onNotesChange={setWeek2Notes}
           />
           <WeekGrid
-            weekLabel={fmtWeekLabel(week3Monday)} weekNum="Week 3 — Third Week"
+            weekLabel={fmtWeekLabel(week3Monday)} weekNum="Week 3 — Third Week" monday={week3Monday}
             data={week3} onChange={handleWeekChange(setWeek3)} disabled={busy}
             confidence={week3Confidence} onConfidenceChange={setWeek3Confidence}
             notes={week3Notes} onNotesChange={setWeek3Notes}
