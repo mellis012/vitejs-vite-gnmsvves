@@ -511,7 +511,7 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
                 <th style={thS("center")}>Conf</th>
                 <th style={thSortable("center")} onClick={() => handleSort("W3_WeekTotal")}>Wk 3 Avg{arrow("W3_WeekTotal")}</th>
                 <th style={thS("center")}>Conf</th>
-                <th style={thS("center")}>Wk 4+</th>
+                <th style={thS("center")}>Wk 4+ Avg</th>
                 <th style={thSortable()}         onClick={() => handleSort("job_end_date")}>End Date{arrow("job_end_date")}</th>
               </tr>
             </thead>
@@ -529,7 +529,7 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
                     <td style={{ ...tdS("center") }}><ConfBadge value={String(r.payload?.W2_Confidence || "")} /></td>
                     <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text)" }}>{fmtAvg(payloadAvgActive(r.payload, "W3"))}</td>
                     <td style={{ ...tdS("center") }}><ConfBadge value={String(r.payload?.W3_Confidence || "")} /></td>
-                    <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted)" }}>{Number(r.payload?.Weeks_4_Plus_Total_Crew) || "–"}</td>
+                    <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted)" }}>{(() => { const t = Number(r.payload?.Weeks_4_Plus_Total_Crew) || 0; const c = Number(r.payload?.Weeks_4_Plus_Count) || 0; return fmtAvg(c > 0 ? t / c : 0); })()}</td>
                     <td style={{ ...tdS(), fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>
                       {r.job_end_date
                         ? new Date(r.job_end_date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
@@ -800,8 +800,8 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
               />
               <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, padding: "16px 20px" }}>
                 <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 4 }}>Total Crew (Wk 4+)</div>
-                  <div style={{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 700, color: "var(--text)" }}>{Number(job.payload?.Weeks_4_Plus_Total_Crew)}</div>
+                  <div style={{ fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 4 }}>Avg Crew / Week (Wk 4+)</div>
+                  <div style={{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 700, color: "var(--text)" }}>{(() => { const t = Number(job.payload?.Weeks_4_Plus_Total_Crew) || 0; const c = Number(job.payload?.Weeks_4_Plus_Count) || 0; return fmtAvg(c > 0 ? t / c : 0); })()}</div>
                 </div>
                 {job.payload?.Weeks_4_Plus_Summary && String(job.payload.Weeks_4_Plus_Summary) !== "N/A" && (
                   <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", lineHeight: 1.8, wordBreak: "break-word" }}>
