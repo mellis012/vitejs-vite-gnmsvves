@@ -3,6 +3,7 @@ import { supabase } from "./lib/supabase";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, ReferenceLine,
+  LineChart, Line,
 } from "recharts";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -59,8 +60,6 @@ const DAYS_OF_WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 type DayOfWeek = typeof DAYS_OF_WEEK[number];
 
 // ── Average / delta helpers ─────────────────────────────────────────────────
-const avgNum = (total: number) => total / 7; // kept for week-over-week delta math
-
 // Avg per active (non-zero) day from an array of per-day values
 const avgActive = (vals: number[]): number => {
   const pos = vals.filter(v => v > 0);
@@ -178,12 +177,36 @@ function ConfBadge({ value }: { value: string }) {
   );
 }
 
+// Custom x-axis tick for the 9-bar role/week histogram
+// Role abbr on first line, week label (amber) on second line under the FO bar only
+function HistTick({ x = 0, y = 0, payload }: { x?: number | string; y?: number | string; payload?: { value: string } }) {
+  const nx = Number(x);
+  const ny = Number(y);
+  const [wk, abbr] = String(payload?.value ?? "").split("·");
+  const isFirst = abbr?.trim() === "FO";
+  return (
+    <g transform={`translate(${nx},${ny})`}>
+      <text x={0} y={13} textAnchor="middle" fill="#7d8590" fontSize={11}
+        fontFamily="'Barlow Condensed',sans-serif">
+        {abbr?.trim()}
+      </text>
+      {isFirst && (
+        <text x={0} y={27} textAnchor="middle" fill="#f0b429" fontSize={11}
+          fontFamily="'Barlow Condensed',sans-serif" fontWeight={700} letterSpacing={1}>
+          {wk?.trim()}
+        </text>
+      )}
+    </g>
+  );
+}
+
 // ── Portfolio View ─────────────────────────────────────────────────────────
-function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; reports: Report[] }) {
+function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[]; reports: Report[]; jobsMap: Record<string, string> }) {
   const [sortField,   setSortField]   = useState("job_number");
   const [sortDir,     setSortDir]     = useState<"asc" | "desc">("asc");
   const [weekPair,    setWeekPair]    = useState<WeekPairKey>("W1-W2");
   const [hoveredRole, setHoveredRole] = useState<string | null>(null);
+  const [histGroupBy, setHistGroupBy] = useState<"job" | "union">("job");
 
   // Per-day company-wide totals for all three weeks
   const dayTotals = useMemo(() => {
@@ -214,31 +237,91 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
 
   const jobKeys = latestByJob.map(r => r.job_number || String(r.id));
 
-  // Histogram — avg daily workers per job per week
+  // Resolve local union for a report — payload first, jobs table fallback
+  const getUnion = (r: Report): string =>
+    String(r.payload?.Job_LocalUnion || jobsMap[r.job_number] || "Unknown");
+
+  // Union keys + color map (for "by union" histogram mode)
+  const unionKeys = useMemo(() => {
+    const s = new Set<string>();
+    latestByJob.forEach(r => s.add(getUnion(r)));
+    return Array.from(s).sort();
+  }, [latestByJob, jobsMap]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const unionColorMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    unionKeys.forEach((u, i) => { m[u] = JOB_COLORS[i % JOB_COLORS.length]; });
+    return m;
+  }, [unionKeys]);
+
+  // Histogram — 9 bars (3 weeks × 3 roles), stacked by job or union
+  const ROLES_HIST = [
+    { tag: "FO", abbr: "FO" },
+    { tag: "JO", abbr: "JO" },
+    { tag: "AP", abbr: "AP" },
+  ] as const;
+  const WEEKS_HIST = [
+    { key: "W1" as const, label: "Wk 1" },
+    { key: "W2" as const, label: "Wk 2" },
+    { key: "W3" as const, label: "Wk 3" },
+  ];
+
   const histData = useMemo(() =>
-    (["W1", "W2", "W3"] as const).map((w, wi) => {
-      const labels = ["Week 1", "Week 2", "Week 3"];
-      const entry: Record<string, string | number> = { weekLabel: labels[wi] };
-      latestByJob.forEach(r => {
-        const key = r.job_number || String(r.id);
-        entry[key] = payloadAvgActive(r.payload, w);
-      });
-      return entry;
-    }),
-    [latestByJob]
+    WEEKS_HIST.flatMap(({ key: wk, label: wkLabel }) =>
+      ROLES_HIST.map(({ tag, abbr }) => {
+        const entry: Record<string, string | number> = { xKey: `${wkLabel}·${abbr}` };
+        if (histGroupBy === "job") {
+          latestByJob.forEach(r => {
+            entry[r.job_number || String(r.id)] = payloadAvgActive(r.payload, wk, tag);
+          });
+        } else {
+          latestByJob.forEach(r => {
+            const u = getUnion(r);
+            entry[u] = (Number(entry[u]) || 0) + payloadAvgActive(r.payload, wk, tag);
+          });
+        }
+        return entry;
+      })
+    ),
+    [latestByJob, histGroupBy, jobsMap] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  // Per-job role deltas for the selected week pair
+  // Week trend line — always 52 points (Wk 1–52).
+  // Wk 1–3 use per-day role data; Wk 4–52 sum Remaining_Wk{n}_Crew across all jobs.
+  // Weeks beyond 52 are ignored entirely (not included in any bucket).
+  const weekTrendData = useMemo(() => {
+    const sumAvg = (wk: string) =>
+      latestByJob.reduce((s, r) => s + payloadAvgActive(r.payload, wk), 0);
+
+    const points: { week: string; avg: number }[] = [
+      { week: "Wk 1", avg: sumAvg("W1") },
+      { week: "Wk 2", avg: sumAvg("W2") },
+      { week: "Wk 3", avg: sumAvg("W3") },
+    ];
+
+    for (let n = 4; n <= 52; n++) {
+      const total = latestByJob.reduce(
+        (s, r) => s + (Number(r.payload?.[`Remaining_Wk${n}_Crew`]) || 0),
+        0
+      );
+      points.push({ week: `Wk ${n}`, avg: total });
+    }
+
+    return points;
+  }, [latestByJob]);
+
+  // Per-job role deltas for the selected week pair.
+  // Uses payloadAvgActive so both sides exclude zero-days consistently.
   const transferRows = useMemo(() => {
     const cfg = WEEK_PAIRS.find(p => p.key === weekPair)!;
     const { from, to } = cfg;
     return latestByJob.map(r => ({
       job:        r.job_number,
       pm:         r.pm_name,
-      foDelta:    avgNum((Number(r.payload?.[`${to}_FO_Total`])    || 0) - (Number(r.payload?.[`${from}_FO_Total`])    || 0)),
-      joDelta:    avgNum((Number(r.payload?.[`${to}_JO_Total`])    || 0) - (Number(r.payload?.[`${from}_JO_Total`])    || 0)),
-      apDelta:    avgNum((Number(r.payload?.[`${to}_AP_Total`])    || 0) - (Number(r.payload?.[`${from}_AP_Total`])    || 0)),
-      totalDelta: avgNum((Number(r.payload?.[`${to}_WeekTotal`])   || 0) - (Number(r.payload?.[`${from}_WeekTotal`])   || 0)),
+      foDelta:    payloadAvgActive(r.payload, to, "FO") - payloadAvgActive(r.payload, from, "FO"),
+      joDelta:    payloadAvgActive(r.payload, to, "JO") - payloadAvgActive(r.payload, from, "JO"),
+      apDelta:    payloadAvgActive(r.payload, to, "AP") - payloadAvgActive(r.payload, from, "AP"),
+      totalDelta: payloadAvgActive(r.payload, to)       - payloadAvgActive(r.payload, from),
     }));
   }, [latestByJob, weekPair]);
 
@@ -338,21 +421,44 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
         </div>
       </section>
 
-      {/* ── Stacked Labor Allocation Histogram ── */}
+      {/* ── Labor Allocation Histogram ── */}
       {latestByJob.length > 0 && (
         <section>
-          <SectionLabel
-            text="Labor Allocation by Week"
-            sub="Avg daily workers per week — each color segment is one job · dashed line = company capacity"
-          />
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
+            <SectionLabel
+              text="Labor Allocation by Week"
+              sub={`Avg daily workers per week · split by role · stacked by ${histGroupBy === "job" ? "job" : "local union"} · dashed = capacity`}
+            />
+            {/* Group-by toggle */}
+            <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 3, overflow: "hidden", flexShrink: 0 }}>
+              {(["job", "union"] as const).map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => setHistGroupBy(mode)}
+                  style={{
+                    background: histGroupBy === mode ? "var(--accent)" : "transparent",
+                    color: histGroupBy === mode ? "#0d1117" : "var(--muted)",
+                    border: "none", cursor: "pointer",
+                    fontFamily: "var(--font-label)", fontWeight: 700, fontSize: 11,
+                    letterSpacing: "0.08em", textTransform: "uppercase",
+                    padding: "6px 14px", transition: "all 0.15s",
+                  }}
+                >
+                  {mode === "job" ? "By Job" : "By Union"}
+                </button>
+              ))}
+            </div>
+          </div>
           <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, padding: "24px 16px 16px" }}>
-            <ResponsiveContainer width="100%" height={320}>
-              <BarChart data={histData} margin={{ top: 8, right: 56, left: 0, bottom: 4 }}>
+            <ResponsiveContainer width="100%" height={340}>
+              <BarChart data={histData} margin={{ top: 16, right: 56, left: 0, bottom: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                 <XAxis
-                  dataKey="weekLabel"
-                  tick={{ fill: "#7d8590", fontFamily: "'Barlow Condensed',sans-serif", fontSize: 13 }}
+                  dataKey="xKey"
+                  tick={(props) => <HistTick {...props} />}
                   axisLine={{ stroke: "#30363d" }} tickLine={false}
+                  interval={0}
+                  height={48}
                 />
                 <YAxis
                   tick={{ fill: "#7d8590", fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }}
@@ -373,15 +479,19 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
                   strokeWidth={1.5}
                   label={{ value: `Cap ${COMPANY_CAPACITY}`, fill: "#f0b429", fontFamily: "'Barlow Condensed',sans-serif", fontSize: 11, position: "right" }}
                 />
-                {jobKeys.map((key, i) => (
-                  <Bar
-                    key={key}
-                    dataKey={key}
-                    stackId="a"
-                    fill={jobColorMap[key] ?? JOB_COLORS[i % JOB_COLORS.length]}
-                    radius={i === jobKeys.length - 1 ? [3, 3, 0, 0] : undefined}
-                  />
-                ))}
+                {(histGroupBy === "job" ? jobKeys : unionKeys).map((key, i) => {
+                  const colorMap = histGroupBy === "job" ? jobColorMap : unionColorMap;
+                  const keys     = histGroupBy === "job" ? jobKeys     : unionKeys;
+                  return (
+                    <Bar
+                      key={key}
+                      dataKey={key}
+                      stackId="a"
+                      fill={colorMap[key] ?? JOB_COLORS[i % JOB_COLORS.length]}
+                      radius={i === keys.length - 1 ? [3, 3, 0, 0] : undefined}
+                    />
+                  );
+                })}
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -430,9 +540,9 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
           {/* Releasing / Stable / Pulling — each contains roles categorized by avg delta direction */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
             {([
-              { label: "Releasing", color: "#f85149",    bg: "rgba(248,81,73,0.08)",    border: "rgba(248,81,73,0.25)",    roles: roleStats.filter(r => r.avgDelta < -0.1) },
-              { label: "Stable",    color: "var(--muted)", bg: "rgba(125,133,144,0.06)", border: "rgba(125,133,144,0.18)", roles: roleStats.filter(r => Math.abs(r.avgDelta) <= 0.1) },
-              { label: "Pulling",   color: "#3fb950",    bg: "rgba(63,185,80,0.08)",    border: "rgba(63,185,80,0.25)",    roles: roleStats.filter(r => r.avgDelta > 0.1) },
+              { label: "Releasing", color: "#f85149",    bg: "rgba(248,81,73,0.08)",    border: "rgba(248,81,73,0.25)",    roles: roleStats.filter(r => Math.round(r.avgDelta * 10) / 10 <= -0.1) },
+              { label: "Stable",    color: "var(--muted)", bg: "rgba(125,133,144,0.06)", border: "rgba(125,133,144,0.18)", roles: roleStats.filter(r => { const v = Math.round(r.avgDelta * 10) / 10; return v > -0.1 && v < 0.1; }) },
+              { label: "Pulling",   color: "#3fb950",    bg: "rgba(63,185,80,0.08)",    border: "rgba(63,185,80,0.25)",    roles: roleStats.filter(r => Math.round(r.avgDelta * 10) / 10 >= 0.1) },
             ] as const).map(({ label, color, bg, border, roles }) => (
               <div key={label} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, overflow: "visible" }}>
                 {/* Container header */}
@@ -499,6 +609,34 @@ function PortfolioView({ latestByJob, reports }: { latestByJob: Report[]; report
           text="Portfolio Health Matrix"
           sub="One row per active job — latest submission · left border = Wk 1 confidence · values = avg workers/day · click headers to sort"
         />
+
+        {/* Weekly avg/day trend line */}
+        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, padding: "16px 16px 8px", marginBottom: 10 }}>
+          <div style={{ fontFamily: "var(--font-label)", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 6 }}>
+            Company-Wide Avg Workers / Day
+          </div>
+          <ResponsiveContainer width="100%" height={140}>
+            <LineChart data={weekTrendData} margin={{ top: 4, right: 56, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+              <XAxis dataKey="week" tick={{ fill: "#7d8590", fontFamily: "'Barlow Condensed',sans-serif", fontSize: 13 }} axisLine={{ stroke: "#30363d" }} tickLine={false} />
+              <YAxis tick={{ fill: "#7d8590", fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }} axisLine={false} tickLine={false}
+                tickFormatter={(v: number) => (Math.round(v * 10) / 10).toFixed(1)}
+                label={{ value: "avg/day", angle: -90, position: "insideLeft", fill: "#7d8590", fontFamily: "'Barlow Condensed',sans-serif", fontSize: 11, dx: -4 }}
+              />
+              <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ stroke: "rgba(255,255,255,0.1)" }}
+                formatter={(value: unknown) => [(Math.round((Number(value) || 0) * 10) / 10).toFixed(1), "Avg / Day"]}
+              />
+              <ReferenceLine y={COMPANY_CAPACITY} stroke="#f0b429" strokeDasharray="6 3" strokeWidth={1.5}
+                label={{ value: `Cap ${COMPANY_CAPACITY}`, fill: "#f0b429", fontFamily: "'Barlow Condensed',sans-serif", fontSize: 11, position: "right" }}
+              />
+              <Line type="monotone" dataKey="avg" stroke="var(--accent)" strokeWidth={2.5}
+                dot={{ fill: "var(--accent)", r: 5, strokeWidth: 0 }}
+                activeDot={{ r: 7, strokeWidth: 0 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
         <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
             <thead>
@@ -825,6 +963,7 @@ export default function Dashboard() {
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"portfolio" | "project">("portfolio");
+  const [jobsMap,   setJobsMap]   = useState<Record<string, string>>({});
 
   const fetchData = async () => {
     setLoading(true);
@@ -837,6 +976,22 @@ export default function Dashboard() {
     else setReports((data as Report[]) || []);
     setLoading(false);
   };
+
+  // Fetch jobs table to resolve local_union for older submissions missing it in payload
+  useEffect(() => {
+    supabase
+      .from("jobs")
+      .select("job_number, local_union")
+      .then(({ data }) => {
+        if (data) {
+          const m: Record<string, string> = {};
+          (data as { job_number: string; local_union: string }[]).forEach(j => {
+            if (j.job_number) m[j.job_number] = j.local_union || "";
+          });
+          setJobsMap(m);
+        }
+      });
+  }, []);
 
   useEffect(() => { fetchData(); }, []);
 
@@ -920,7 +1075,7 @@ export default function Dashboard() {
       {/* ── Page content ── */}
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "32px 24px 60px" }}>
         {activeTab === "portfolio"
-          ? <PortfolioView latestByJob={latestByJob} reports={reports} />
+          ? <PortfolioView latestByJob={latestByJob} reports={reports} jobsMap={jobsMap} />
           : <ProjectView   latestByJob={latestByJob} reports={reports} />
         }
       </div>
