@@ -110,6 +110,7 @@ function buildPayload({
     PM_Name:              pmName,
     Job_Number:           jobNumber,
     Job_End_Date:         jobEndDate,
+    W1_Start_Date:  thisMonday.toISOString().split("T")[0],
     W1_Dates:       fmtWeekLabel(thisMonday),  ...flatWeek(week1, "W1"), W1_Confidence: week1Confidence, W1_Notes: week1Notes,
     W2_Dates:       fmtWeekLabel(week2Monday), ...flatWeek(week2, "W2"), W2_Confidence: week2Confidence, W2_Notes: week2Notes,
     W3_Dates:       fmtWeekLabel(week3Monday), ...flatWeek(week3, "W3"), W3_Confidence: week3Confidence, W3_Notes: week3Notes,
@@ -392,12 +393,15 @@ export default function CrewForm() {
         const row = data[0] as { payload: Record<string, unknown>; job_end_date: string | null };
         const p = row.payload;
 
-        // Week grids — shift forward based on weeks elapsed since last submission
+        // Shift forward based on how many weeks separate the submission's W1 from the
+        // current form's W1 (thisMonday). Use stored W1_Start_Date when available,
+        // otherwise derive it as "next Monday after the submission week".
         const submittedAt = p.Submission_Timestamp ? String(p.Submission_Timestamp) : null;
-        const prevMonday  = submittedAt ? getMonday(submittedAt) : null;
-        const currMonday  = getMonday(new Date());
-        const weekDiff    = prevMonday
-          ? Math.round((currMonday.getTime() - prevMonday.getTime()) / (7 * 24 * 60 * 60 * 1000))
+        const subW1Start  = p.W1_Start_Date
+          ? new Date(String(p.W1_Start_Date) + "T00:00:00")
+          : submittedAt ? addWeeks(getMonday(submittedAt), 1) : null;
+        const weekDiff    = subW1Start
+          ? Math.round((thisMonday.getTime() - subW1Start.getTime()) / (7 * 24 * 60 * 60 * 1000))
           : 0;
 
         if (weekDiff <= 0) {
@@ -539,9 +543,31 @@ export default function CrewForm() {
     });
 
     try {
-      const { error } = await supabase
+      // Check for an existing submission for this job + same W1 week and update it,
+      // so there is only ever one row per job per week.
+      const w1StartDate = thisMonday.toISOString().split("T")[0];
+      const { data: existing } = await supabase
         .from("manpower_reports")
-        .insert([{ pm_name: pmName, job_number: jobNumber, job_end_date: jobEndDate, payload }]);
+        .select("id, payload")
+        .eq("job_number", jobNumber.trim())
+        .order("created_at", { ascending: false });
+
+      const sameWeekRow = (existing ?? []).find(r => {
+        const p = r.payload as Record<string, unknown>;
+        return String(p?.W1_Start_Date ?? "") === w1StartDate;
+      });
+
+      let error;
+      if (sameWeekRow) {
+        ({ error } = await supabase
+          .from("manpower_reports")
+          .update({ pm_name: pmName, job_number: jobNumber, job_end_date: jobEndDate, payload })
+          .eq("id", sameWeekRow.id));
+      } else {
+        ({ error } = await supabase
+          .from("manpower_reports")
+          .insert([{ pm_name: pmName, job_number: jobNumber, job_end_date: jobEndDate, payload }]));
+      }
 
       if (error) throw error;
 
