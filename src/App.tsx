@@ -554,7 +554,17 @@ export default function CrewForm() {
 
       const sameWeekRow = (existing ?? []).find(r => {
         const p = r.payload as Record<string, unknown>;
-        return String(p?.W1_Start_Date ?? "") === w1StartDate;
+        // New submissions: compare stored W1_Start_Date directly
+        if (p?.W1_Start_Date) {
+          return String(p.W1_Start_Date) === w1StartDate;
+        }
+        // Old submissions (pre-W1_Start_Date): derive W1 start from Submission_Timestamp
+        const subTs = p?.Submission_Timestamp ? String(p.Submission_Timestamp) : null;
+        if (subTs) {
+          const derived = addWeeks(getMonday(new Date(subTs)), 1).toISOString().split("T")[0];
+          return derived === w1StartDate;
+        }
+        return false;
       });
 
       let error;
