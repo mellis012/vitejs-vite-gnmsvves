@@ -387,7 +387,7 @@ export default function CrewForm() {
         .from("manpower_reports")
         .select("payload, job_end_date")
         .eq("job_number", jobNumber.trim())
-        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
         .limit(1);
       if (data?.[0]) {
         const row = data[0] as { payload: Record<string, unknown>; job_end_date: string | null };
@@ -550,7 +550,7 @@ export default function CrewForm() {
         .from("manpower_reports")
         .select("id, payload")
         .eq("job_number", jobNumber.trim())
-        .order("created_at", { ascending: false });
+        .order("id", { ascending: false });
 
       const sameWeekRow = (existing ?? []).find(r => {
         const p = r.payload as Record<string, unknown>;

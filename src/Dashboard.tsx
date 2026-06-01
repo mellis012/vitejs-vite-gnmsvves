@@ -971,7 +971,7 @@ export default function Dashboard() {
     const { data, error } = await supabase
       .from("manpower_reports")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("id", { ascending: false });
     if (error) setError(error.message);
     else setReports((data as Report[]) || []);
     setLoading(false);
