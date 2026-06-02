@@ -57,6 +57,36 @@ function weekGridFromPayload(prefix: string, p: Record<string, unknown>): Record
   return grid;
 }
 
+// ── Arrow-key navigation helpers ──────────────────────────────────────────
+function handleGridKey(
+  e: React.KeyboardEvent<HTMLInputElement>,
+  gridId: string,
+  rowIdx: number,
+  colIdx: number,
+) {
+  if (!["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.key)) return;
+  e.preventDefault();
+  let r = rowIdx, c = colIdx;
+  if      (e.key === "ArrowDown")  r = (rowIdx + 1) % ROLES.length;
+  else if (e.key === "ArrowUp")    r = (rowIdx - 1 + ROLES.length) % ROLES.length;
+  else if (e.key === "ArrowRight") c = (colIdx + 1) % DAYS.length;
+  else if (e.key === "ArrowLeft")  c = (colIdx - 1 + DAYS.length) % DAYS.length;
+  (document.querySelector(`[data-grid="${gridId}"][data-row="${r}"][data-col="${c}"]`) as HTMLInputElement | null)?.focus();
+}
+
+function handleRemainingKey(
+  e: React.KeyboardEvent<HTMLInputElement>,
+  idx: number,
+  total: number,
+) {
+  if (!["ArrowUp","ArrowDown"].includes(e.key)) return;
+  e.preventDefault();
+  const next = e.key === "ArrowDown"
+    ? Math.min(idx + 1, total - 1)
+    : Math.max(idx - 1, 0);
+  (document.querySelector(`[data-remaining][data-ridx="${next}"]`) as HTMLInputElement | null)?.focus();
+}
+
 // ── Payload builder ────────────────────────────────────────────────────────
 function buildPayload({
   pmName, jobNumber, jobEndDate,
@@ -156,7 +186,7 @@ const textInput: React.CSSProperties = {
 
 // ── WeekGrid ───────────────────────────────────────────────────────────────
 function WeekGrid({ weekLabel, weekNum, monday, data, onChange, disabled,
-                    confidence, onConfidenceChange, notes, onNotesChange }: {
+                    confidence, onConfidenceChange, notes, onNotesChange, gridId }: {
   weekLabel: string;
   weekNum: string;
   monday: Date;
@@ -167,6 +197,7 @@ function WeekGrid({ weekLabel, weekNum, monday, data, onChange, disabled,
   onConfidenceChange: (value: string) => void;
   notes: string;
   onNotesChange: (value: string) => void;
+  gridId: string;
 }) {
   const colTotal = (day: string) => ROLES.reduce((s, r) => s + (parseInt(data[r][day]) || 0), 0);
 
@@ -223,10 +254,12 @@ function WeekGrid({ weekLabel, weekNum, monday, data, onChange, disabled,
                 <td style={{ ...tdS("left"), fontFamily: "var(--font-label)", fontWeight: 600, fontSize: 12, letterSpacing: "0.06em", color: "var(--label)", whiteSpace: "nowrap" }}>
                   {role}
                 </td>
-                {DAYS.map(day => (
+                {DAYS.map((day, di) => (
                   <td key={day} style={tdS("center")}>
                     <input type="number" min="0" max="99" value={data[role][day]} disabled={disabled}
                       onChange={e => onChange(role, day, e.target.value)}
+                      onKeyDown={e => handleGridKey(e, gridId, ri, di)}
+                      data-grid={gridId} data-row={ri} data-col={di}
                       style={{ ...numInput, opacity: disabled ? 0.5 : 1 }} placeholder="0" />
                   </td>
                 ))}
@@ -757,19 +790,19 @@ export default function CrewForm() {
             weekLabel={fmtWeekLabel(thisMonday)} weekNum="Week 1 — Next Week" monday={thisMonday}
             data={week1} onChange={handleWeekChange(setWeek1)} disabled={busy}
             confidence={week1Confidence} onConfidenceChange={setWeek1Confidence}
-            notes={week1Notes} onNotesChange={setWeek1Notes}
+            notes={week1Notes} onNotesChange={setWeek1Notes} gridId="w1"
           />
           <WeekGrid
             weekLabel={fmtWeekLabel(week2Monday)} weekNum="Week 2 — Following Week" monday={week2Monday}
             data={week2} onChange={handleWeekChange(setWeek2)} disabled={busy}
             confidence={week2Confidence} onConfidenceChange={setWeek2Confidence}
-            notes={week2Notes} onNotesChange={setWeek2Notes}
+            notes={week2Notes} onNotesChange={setWeek2Notes} gridId="w2"
           />
           <WeekGrid
             weekLabel={fmtWeekLabel(week3Monday)} weekNum="Week 3 — Third Week" monday={week3Monday}
             data={week3} onChange={handleWeekChange(setWeek3)} disabled={busy}
             confidence={week3Confidence} onConfidenceChange={setWeek3Confidence}
-            notes={week3Notes} onNotesChange={setWeek3Notes}
+            notes={week3Notes} onNotesChange={setWeek3Notes} gridId="w3"
           />
         </section>
 
@@ -810,6 +843,8 @@ export default function CrewForm() {
                           <input type="number" min="0" max="999" disabled={busy}
                             value={remainingWeeks[key] || ""}
                             onChange={e => setRemainingWeeks(p => ({ ...p, [key]: e.target.value }))}
+                            onKeyDown={e => handleRemainingKey(e, i, remainingWeekDefs.length)}
+                            data-remaining="true" data-ridx={i}
                             placeholder="0" style={{ ...numInput, width: 80 }} />
                         </td>
                       </tr>

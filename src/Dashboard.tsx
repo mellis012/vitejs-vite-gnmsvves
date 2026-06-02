@@ -96,6 +96,21 @@ const fmtDelta = (v: number): string => {
 const deltaColor = (v: number): string =>
   v > 0 ? "#3fb950" : v < 0 ? "#f85149" : "var(--muted)";
 
+// ── Date utilities (mirrors App.tsx — used for current-week snapshot filter) ──
+function dbGetMonday(date: Date | string): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function dbAddWeeks(date: Date, n: number): Date {
+  const d = new Date(date);
+  d.setDate(d.getDate() + n * 7);
+  return d;
+}
+
 // ── CSS ────────────────────────────────────────────────────────────────────
 const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;600;700&family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap');
@@ -111,6 +126,8 @@ const CSS = `
   *{box-sizing:border-box;margin:0;padding:0;}
   select option { background:#161b22; color:#e6edf3; }
   select:focus  { border-color:var(--accent)!important; box-shadow:0 0 0 2px rgba(240,180,41,.15); outline:none; }
+  .health-row   { transition: background 0.1s; }
+  .health-row:hover { background: #1e2631 !important; cursor: pointer; }
 `;
 
 const TOOLTIP_STYLE = {
@@ -201,14 +218,32 @@ function HistTick({ x = 0, y = 0, payload }: { x?: number | string; y?: number |
 }
 
 // ── Portfolio View ─────────────────────────────────────────────────────────
-function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[]; reports: Report[]; jobsMap: Record<string, string> }) {
+function PortfolioView({ latestByJob, jobsMap, currentW1Start, onJobClick }: { latestByJob: Report[]; jobsMap: Record<string, string>; currentW1Start: string; onJobClick: (job: string) => void }) {
   const [sortField,   setSortField]   = useState("job_number");
   const [sortDir,     setSortDir]     = useState<"asc" | "desc">("asc");
   const [weekPair,    setWeekPair]    = useState<WeekPairKey>("W1-W2");
   const [hoveredRole, setHoveredRole] = useState<string | null>(null);
   const [histGroupBy, setHistGroupBy] = useState<"job" | "union">("job");
 
-  // Per-day company-wide totals for all three weeks
+  // Jobs that have submitted for the current W1 week — used exclusively for the
+  // Portfolio Snapshot so all rows in the table cover the same calendar week.
+  // Backward compat: old rows without W1_Start_Date derive it from Submission_Timestamp.
+  const snapshotJobs = useMemo(() =>
+    latestByJob.filter(r => {
+      const p = r.payload;
+      if (!p) return false;
+      if (p.W1_Start_Date) return String(p.W1_Start_Date) === currentW1Start;
+      const subTs = p.Submission_Timestamp ? String(p.Submission_Timestamp) : null;
+      if (subTs) {
+        const derived = dbAddWeeks(dbGetMonday(new Date(subTs)), 1).toISOString().split("T")[0];
+        return derived === currentW1Start;
+      }
+      return false;
+    }),
+    [latestByJob, currentW1Start]
+  );
+
+  // Per-day company-wide totals for all three weeks — current-week submissions only
   const dayTotals = useMemo(() => {
     const result: Record<string, Record<DayOfWeek, number>> = {
       W1: { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 },
@@ -217,7 +252,7 @@ function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[
     };
     for (const week of ["W1", "W2", "W3"] as const) {
       for (const day of DAYS_OF_WEEK) {
-        result[week][day] = latestByJob.reduce((s, r) => {
+        result[week][day] = snapshotJobs.reduce((s, r) => {
           const fo = Number(r.payload?.[`${week}_FO_${day}`]) || 0;
           const jo = Number(r.payload?.[`${week}_JO_${day}`]) || 0;
           const ap = Number(r.payload?.[`${week}_AP_${day}`]) || 0;
@@ -226,7 +261,7 @@ function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[
       }
     }
     return result;
-  }, [latestByJob]);
+  }, [snapshotJobs]);
 
   // Job color map
   const jobColorMap = useMemo(() => {
@@ -325,17 +360,36 @@ function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[
     }));
   }, [latestByJob, weekPair]);
 
-  // Role-focused stats: avg delta per role across all jobs (+ per-job breakdown for hover)
+  // Role-focused stats — per-job breakdown for hover + portfolio totals for display.
+  // sumDelta  = sum of all per-job deltas  → displayed number (can be verified by summing hover values)
+  // avgDelta  = sumDelta / job count        → used only for Releasing/Stable/Pulling bucket placement
   const roleStats = useMemo(() => [
     { key: "foDelta" as const, label: "Foremen",     color: "#f0b429" },
     { key: "joDelta" as const, label: "Journeymen",  color: "#3b82f6" },
     { key: "apDelta" as const, label: "Apprentices", color: "#10b981" },
   ].map(role => {
     const jobDeltas = transferRows.map(r => ({ job: r.job, pm: r.pm, delta: r[role.key] }));
-    const avgDelta  = jobDeltas.length > 0 ? jobDeltas.reduce((s, d) => s + d.delta, 0) / jobDeltas.length : 0;
-    return { ...role, jobDeltas, avgDelta };
+    const sumDelta  = jobDeltas.reduce((s, d) => s + d.delta, 0);
+    const avgDelta  = jobDeltas.length > 0 ? sumDelta / jobDeltas.length : 0;
+    return { ...role, jobDeltas, sumDelta, avgDelta };
   }), [transferRows]);
 
+
+  // Date range strings for the Portfolio Snapshot rows.
+  // Taken from the most recently submitted current-week payload.
+  const weekDates = useMemo(() => {
+    if (snapshotJobs.length === 0) return { W1: "", W2: "", W3: "" };
+    const mostRecent = snapshotJobs.reduce((best, r) => {
+      const ts     = String(r.payload?.Submission_Timestamp || "");
+      const bestTs = String(best.payload?.Submission_Timestamp || "");
+      return ts > bestTs ? r : best;
+    });
+    return {
+      W1: String(mostRecent.payload?.W1_Dates || ""),
+      W2: String(mostRecent.payload?.W2_Dates || ""),
+      W3: String(mostRecent.payload?.W3_Dates || ""),
+    };
+  }, [snapshotJobs]);
 
   // Sortable health matrix
   const healthRows = useMemo(() =>
@@ -368,7 +422,7 @@ function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[
       <section>
         <SectionLabel
           text="Portfolio Snapshot"
-          sub={`Latest submission per job · ${reports.length} total submission${reports.length !== 1 ? "s" : ""} · daily totals = workers deployed company-wide on that day`}
+          sub={`Current-week submissions only · ${snapshotJobs.length} of ${latestByJob.length} job${latestByJob.length !== 1 ? "s" : ""} submitted · daily totals = workers deployed company-wide on that day`}
         />
 
         {/* Active Jobs card + daily breakdown table side by side */}
@@ -376,8 +430,13 @@ function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[
 
           {/* Active Jobs card */}
           <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, padding: "16px 20px", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", flexShrink: 0, minWidth: 110 }}>
-            <div style={{ fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 8, whiteSpace: "nowrap" }}>Active Jobs</div>
-            <div style={{ fontFamily: "var(--font-display)", fontSize: 42, fontWeight: 700, color: "var(--accent)", lineHeight: 1 }}>{latestByJob.length}</div>
+            <div style={{ fontFamily: "var(--font-label)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 8, whiteSpace: "nowrap" }}>This Week</div>
+            <div style={{ fontFamily: "var(--font-display)", fontSize: 42, fontWeight: 700, color: "var(--accent)", lineHeight: 1 }}>{snapshotJobs.length}</div>
+            {latestByJob.length > snapshotJobs.length && (
+              <div style={{ fontFamily: "var(--font-label)", fontSize: 10, color: "#f85149", marginTop: 6, letterSpacing: "0.06em", whiteSpace: "nowrap" }}>
+                {latestByJob.length - snapshotJobs.length} pending
+              </div>
+            )}
           </div>
 
           {/* Daily breakdown table */}
@@ -403,6 +462,11 @@ function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[
                   <tr key={prefix} style={{ background: ri % 2 === 0 ? "var(--row-even)" : "var(--row-odd)" }}>
                     <td style={{ ...tdS(), fontFamily: "var(--font-label)", fontWeight: 700, fontSize: 13, letterSpacing: "0.08em", color: "var(--accent)", whiteSpace: "nowrap" }}>
                       {label}
+                      {weekDates[prefix] && (
+                        <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)", fontWeight: 400, marginTop: 2, letterSpacing: 0 }}>
+                          {weekDates[prefix]}
+                        </div>
+                      )}
                     </td>
                     {DAYS_OF_WEEK.map(day => (
                       <td key={day} style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text)" }}>
@@ -509,7 +573,7 @@ function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[
                 Week-over-Week Labor Shift
               </div>
               <div style={{ fontFamily: "var(--font-label)", fontSize: 12, color: "var(--muted)", marginTop: 3, marginLeft: 13, letterSpacing: "0.04em" }}>
-                Avg daily headcount change · {WEEK_PAIRS.find(p => p.key === weekPair)?.label} · categorized by net direction
+                Net daily headcount change across portfolio · {WEEK_PAIRS.find(p => p.key === weekPair)?.label} · sum of all jobs · bucket by avg direction
               </div>
             </div>
             <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
@@ -540,9 +604,9 @@ function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[
           {/* Releasing / Stable / Pulling — each contains roles categorized by avg delta direction */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
             {([
-              { label: "Releasing", color: "#f85149",    bg: "rgba(248,81,73,0.08)",    border: "rgba(248,81,73,0.25)",    roles: roleStats.filter(r => Math.round(r.avgDelta * 10) / 10 <= -0.1) },
-              { label: "Stable",    color: "var(--muted)", bg: "rgba(125,133,144,0.06)", border: "rgba(125,133,144,0.18)", roles: roleStats.filter(r => { const v = Math.round(r.avgDelta * 10) / 10; return v > -0.1 && v < 0.1; }) },
-              { label: "Pulling",   color: "#3fb950",    bg: "rgba(63,185,80,0.08)",    border: "rgba(63,185,80,0.25)",    roles: roleStats.filter(r => Math.round(r.avgDelta * 10) / 10 >= 0.1) },
+              { label: "Releasing", color: "#f85149",    bg: "rgba(248,81,73,0.08)",    border: "rgba(248,81,73,0.25)",    roles: roleStats.filter(r => Math.round(r.sumDelta * 10) / 10 <= -0.1) },
+              { label: "Stable",    color: "var(--muted)", bg: "rgba(125,133,144,0.06)", border: "rgba(125,133,144,0.18)", roles: roleStats.filter(r => { const v = Math.round(r.sumDelta * 10) / 10; return v > -0.1 && v < 0.1; }) },
+              { label: "Pulling",   color: "#3fb950",    bg: "rgba(63,185,80,0.08)",    border: "rgba(63,185,80,0.25)",    roles: roleStats.filter(r => Math.round(r.sumDelta * 10) / 10 >= 0.1) },
             ] as const).map(({ label, color, bg, border, roles }) => (
               <div key={label} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 2, overflow: "visible" }}>
                 {/* Container header */}
@@ -567,8 +631,8 @@ function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[
                           <span style={{ display: "inline-block", width: 3, height: 14, background: role.color, borderRadius: 1, flexShrink: 0 }} />
                           <span style={{ fontFamily: "var(--font-label)", fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--label)" }}>{role.label}</span>
                         </div>
-                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 16, fontWeight: 700, color: deltaColor(role.avgDelta) }}>
-                          {fmtDelta(role.avgDelta)}
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 16, fontWeight: 700, color: deltaColor(role.sumDelta) }}>
+                          {fmtDelta(role.sumDelta)}
                         </span>
                       </div>
                       {/* Hover dropdown — one line per job */}
@@ -658,8 +722,10 @@ function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[
                 const w1Conf = String(r.payload?.W1_Confidence || "");
                 const confBorderColor = CONF_STYLE[w1Conf]?.border ?? "var(--border)";
                 return (
-                  <tr key={r.id} style={{ background: i % 2 === 0 ? "var(--row-even)" : "var(--row-odd)" }}>
-                    <td style={{ ...tdS(), borderLeft: `3px solid ${confBorderColor}`, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text)" }}>{r.job_number}</td>
+                  <tr key={r.id} className="health-row"
+                    onClick={() => onJobClick(r.job_number || String(r.id))}
+                    style={{ background: i % 2 === 0 ? "var(--row-even)" : "var(--row-odd)" }}>
+                    <td style={{ ...tdS(), borderLeft: `3px solid ${confBorderColor}`, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--accent)", textDecoration: "underline", textDecorationColor: "rgba(240,180,41,0.4)" }}>{r.job_number}</td>
                     <td style={{ ...tdS(), fontFamily: "var(--font-label)", fontSize: 12, color: "var(--label)" }}>{r.pm_name}</td>
                     <td style={{ ...tdS("center"), fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: "var(--accent)" }}>{fmtAvg(payloadAvgActive(r.payload, "W1"))}</td>
                     <td style={{ ...tdS("center") }}><ConfBadge value={w1Conf} /></td>
@@ -693,8 +759,11 @@ function PortfolioView({ latestByJob, reports, jobsMap }: { latestByJob: Report[
 }
 
 // ── Project View ───────────────────────────────────────────────────────────
-function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports: Report[] }) {
-  const [selectedJob, setSelectedJob] = useState<string>("");
+function ProjectView({ latestByJob, reports, jumpToJob }: { latestByJob: Report[]; reports: Report[]; jumpToJob?: string }) {
+  // Initialize directly from jumpToJob — ProjectView unmounts when the user switches
+  // to the portfolio tab, so each navigation from the health matrix is a fresh mount
+  // and useState(jumpToJob) captures the correct value without needing an effect.
+  const [selectedJob, setSelectedJob] = useState<string>(jumpToJob || "");
 
   useEffect(() => {
     if (!selectedJob && latestByJob.length > 0) {
@@ -959,11 +1028,18 @@ function ProjectView({ latestByJob, reports }: { latestByJob: Report[]; reports:
 
 // ── Main Dashboard ─────────────────────────────────────────────────────────
 export default function Dashboard() {
-  const [reports,   setReports]   = useState<Report[]>([]);
-  const [loading,   setLoading]   = useState(true);
-  const [error,     setError]     = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"portfolio" | "project">("portfolio");
-  const [jobsMap,   setJobsMap]   = useState<Record<string, string>>({});
+  const [reports,    setReports]    = useState<Report[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState<string | null>(null);
+  const [activeTab,  setActiveTab]  = useState<"portfolio" | "project">("portfolio");
+  const [jobsMap,    setJobsMap]    = useState<Record<string, string>>({});
+  const [jumpToJob,  setJumpToJob]  = useState<string>("");
+
+  // Current expected W1 start — same formula as the form (next Monday from today)
+  const currentW1Start = useMemo(() => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    return dbAddWeeks(dbGetMonday(today), 1).toISOString().split("T")[0];
+  }, []);
 
   const fetchData = async () => {
     setLoading(true);
@@ -1075,8 +1151,9 @@ export default function Dashboard() {
       {/* ── Page content ── */}
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "32px 24px 60px" }}>
         {activeTab === "portfolio"
-          ? <PortfolioView latestByJob={latestByJob} reports={reports} jobsMap={jobsMap} />
-          : <ProjectView   latestByJob={latestByJob} reports={reports} />
+          ? <PortfolioView latestByJob={latestByJob} jobsMap={jobsMap} currentW1Start={currentW1Start}
+                            onJobClick={job => { setJumpToJob(job); setActiveTab("project"); window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior }); }} />
+          : <ProjectView   latestByJob={latestByJob} reports={reports} jumpToJob={jumpToJob} />
         }
       </div>
     </div>

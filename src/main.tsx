@@ -34,7 +34,13 @@ function AppRouter() {
   return page === "dashboard" ? <Dashboard /> : <App />;
 }
 
-createRoot(document.getElementById("root")!).render(
+// Cache the root on the element so Vite HMR re-executions reuse it
+// instead of calling createRoot twice (which causes a React warning + DOM errors).
+const rootEl = document.getElementById("root")!;
+const root = (rootEl as any).__reactRoot ?? createRoot(rootEl);
+(rootEl as any).__reactRoot = root;
+
+root.render(
   <StrictMode>
     <AppRouter />
   </StrictMode>
